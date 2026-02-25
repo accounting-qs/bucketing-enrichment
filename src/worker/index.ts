@@ -1,8 +1,18 @@
 import { Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import db from '../lib/db';
+import http from 'http';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const PORT = process.env.PORT || 10000;
+
+// Render Free tier expects a web service to listen on a port
+http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Worker is alive');
+}).listen(PORT, () => {
+    console.log(`>>> Worker health-check server listening on port ${PORT}`);
+});
 
 const connection = new IORedis(REDIS_URL, {
     maxRetriesPerRequest: null,

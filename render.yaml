@@ -18,16 +18,14 @@ services:
           property: connectionString
       - key: NODE_VERSION
         value: 20
-      # You will need to add your API Keys manually in the Render Dashboard:
-      # OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY
 
-  # 2. The Background Worker
-  - type: worker
+  # 2. The Background Worker (Converted to Web for FREE tier)
+  - type: web
     name: quantum-scale-worker
     env: node
     plan: free
     buildCommand: npm install && npm run build
-    startCommand: node dist/worker.js
+    startCommand: node dist/worker/index.js
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -38,12 +36,14 @@ services:
           type: redis
           name: quantum-redis
           property: connectionString
+      - key: PORT
+        value: 10000
 
   # 3. Managed Redis
   - type: redis
     name: quantum-redis
     plan: free
-    ipAllowList: [] # Only allow internal connections for security
+    ipAllowList: []
 
 databases:
   - name: quantum-db
