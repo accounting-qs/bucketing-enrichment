@@ -15,6 +15,35 @@ if (isProduction) {
       rejectUnauthorized: false
     }
   });
+
+  // Auto-create tables for Postgres if they don't exist
+  pgPool.query(`
+        CREATE TABLE IF NOT EXISTS workbooks (
+            id TEXT PRIMARY KEY,
+            filename TEXT,
+            uploadedAt TEXT,
+            columns TEXT,
+            rowCount INTEGER,
+            storagePath TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS analyses (
+            id TEXT PRIMARY KEY,
+            workbookId TEXT,
+            selectedColumn TEXT,
+            createdAt TEXT,
+            stats TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            status TEXT,
+            progress INTEGER DEFAULT 0,
+            message TEXT,
+            resultId TEXT,
+            updatedAt TEXT
+        );
+    `).catch(err => console.error(">>> DB MIGRATION ERROR:", err));
 } else {
   const DB_PATH = path.join(process.cwd(), 'data', 'demo.db');
   if (!fs.existsSync(path.join(process.cwd(), 'data'))) {
