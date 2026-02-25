@@ -123,8 +123,8 @@ export async function POST(
 
                     for (let d = 0; d < m.path.length; d++) {
                         const segment = m.path[d];
-                        const siblings = parentNode ? parentNode.children : rootBuckets;
-                        let node = siblings.find(b => b.name.toLowerCase() === segment.toLowerCase());
+                        const siblings: BucketNode[] = parentNode ? parentNode.children : rootBuckets;
+                        let node: BucketNode | undefined = siblings.find((b: BucketNode) => b.name.toLowerCase() === segment.toLowerCase());
 
                         if (!node) {
                             node = {
