@@ -18,6 +18,11 @@ if (isProduction) {
 
   // Auto-create tables for Postgres if they don't exist
   pgPool.query(`
+        -- Temporary drop to fix casing from previous run (Demo only)
+        DROP TABLE IF EXISTS jobs; 
+        DROP TABLE IF EXISTS analyses;
+        DROP TABLE IF EXISTS workbooks;
+
         CREATE TABLE IF NOT EXISTS workbooks (
             id TEXT PRIMARY KEY,
             filename TEXT,
@@ -93,7 +98,22 @@ export async function query(sql: string, params: any[] = []): Promise<any> {
       pgSql = pgSql.replace('?', `$${i + 1}`);
     });
     const res = await pgPool.query(pgSql, params);
-    return res.rows;
+    // Map lowercase Postgres keys to CamelCase used in the app
+    return res.rows.map(row => {
+      const newRow: any = {};
+      for (const key of Object.keys(row)) {
+        if (key === 'uploadedat') newRow.uploadedAt = row[key];
+        else if (key === 'rowcount') newRow.rowCount = row[key];
+        else if (key === 'storagepath') newRow.storagePath = row[key];
+        else if (key === 'workbookid') newRow.workbookId = row[key];
+        else if (key === 'selectedcolumn') newRow.selectedColumn = row[key];
+        else if (key === 'createdat') newRow.createdAt = row[key];
+        else if (key === 'resultid') newRow.resultId = row[key];
+        else if (key === 'updatedat') newRow.updatedAt = row[key];
+        else newRow[key] = row[key];
+      }
+      return newRow;
+    });
   } else {
     const stmt = sqliteDb.prepare(sql);
     if (sql.trim().toUpperCase().startsWith('SELECT')) {
