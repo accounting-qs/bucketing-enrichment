@@ -1,0 +1,50 @@
+services:
+  # 1. The Main Next.js App
+  - type: web
+    name: quantum-scale-web
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quantum-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: quantum-redis
+          property: connectionString
+      - key: NODE_VERSION
+        value: 20
+      # You will need to add your API Keys manually in the Render Dashboard:
+      # OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY
+
+  # 2. The Background Worker
+  # Note: This is separate so it can scale independently
+  - type: worker
+    name: quantum-scale-worker
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: node dist/worker.js # We will create this file shortly
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quantum-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: quantum-redis
+          property: connectionString
+
+databases:
+  - name: quantum-db
+    plan: free
+
+redis:
+  - name: quantum-redis
+    plan: free
+    ipAllowList: [] # Only allow internal connections for security
