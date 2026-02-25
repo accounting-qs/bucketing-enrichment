@@ -18,11 +18,6 @@ if (isProduction) {
 
   // Auto-create tables for Postgres if they don't exist
   pgPool.query(`
-        -- Temporary drop to fix casing from previous run (Demo only)
-        DROP TABLE IF EXISTS jobs; 
-        DROP TABLE IF EXISTS analyses;
-        DROP TABLE IF EXISTS workbooks;
-
         CREATE TABLE IF NOT EXISTS workbooks (
             id TEXT PRIMARY KEY,
             filename TEXT,
@@ -48,7 +43,8 @@ if (isProduction) {
             resultId TEXT,
             updatedAt TEXT
         );
-    `).catch(err => console.error(">>> DB MIGRATION ERROR:", err));
+    `).then(() => console.log(">>> DB Migration Successful"))
+    .catch(err => console.error(">>> DB MIGRATION ERROR:", err));
 } else {
   const DB_PATH = path.join(process.cwd(), 'data', 'demo.db');
   if (!fs.existsSync(path.join(process.cwd(), 'data'))) {

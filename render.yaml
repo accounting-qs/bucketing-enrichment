@@ -25,7 +25,7 @@ services:
     env: node
     plan: free
     buildCommand: npm install && npm run build
-    startCommand: node dist/worker/index.js
+    startCommand: npx tsx src/worker/index.ts
     envVars:
       - key: DATABASE_URL
         fromDatabase:
