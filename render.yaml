@@ -22,13 +22,12 @@ services:
       # OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY
 
   # 2. The Background Worker
-  # Note: This is separate so it can scale independently
   - type: worker
     name: quantum-scale-worker
     env: node
     plan: free
     buildCommand: npm install && npm run build
-    startCommand: node dist/worker.js # We will create this file shortly
+    startCommand: node dist/worker.js
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -40,11 +39,12 @@ services:
           name: quantum-redis
           property: connectionString
 
+  # 3. Managed Redis
+  - type: redis
+    name: quantum-redis
+    plan: free
+    ipAllowList: [] # Only allow internal connections for security
+
 databases:
   - name: quantum-db
     plan: free
-
-redis:
-  - name: quantum-redis
-    plan: free
-    ipAllowList: [] # Only allow internal connections for security
