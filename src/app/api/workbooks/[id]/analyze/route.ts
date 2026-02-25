@@ -11,13 +11,13 @@ import { BucketNode } from "@/types";
 
 export async function POST(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const { id } = await params;
     const { selectedColumn, provider = "none", guide = null } = await req.json();
 
     try {
-        const workbook = db.prepare("SELECT * FROM workbooks WHERE id = ?").get(id) as any;
+        const workbook = await db.getOne("SELECT * FROM workbooks WHERE id = ?", [id]);
         if (!workbook) {
             return NextResponse.json({ error: "Workbook not found" }, { status: 404 });
         }
@@ -124,8 +124,8 @@ async function finalizeDeterministic(
     await fs.mkdir(analysisDir, { recursive: true });
     await fs.writeFile(path.join(analysisDir, `${analysisId}.json`), JSON.stringify(result));
 
-    db.prepare(`INSERT INTO analyses (id, workbookId, selectedColumn, createdAt, stats) VALUES (?, ?, ?, ?, ?)`)
-        .run(analysisId, workbookId, selectedColumn, result.createdAt, JSON.stringify(result.stats));
+    await db.query(`INSERT INTO analyses (id, workbookId, selectedColumn, createdAt, stats) VALUES (?, ?, ?, ?, ?)`,
+        [analysisId, workbookId, selectedColumn, result.createdAt, JSON.stringify(result.stats)]);
 
     return NextResponse.json({ analysisId, ...result });
 }

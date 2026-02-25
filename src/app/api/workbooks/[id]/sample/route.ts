@@ -4,7 +4,7 @@ import { getUniqueValues } from "@/lib/csv";
 
 export async function GET(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const { id } = await params;
     const { searchParams } = new URL(req.url);
@@ -15,7 +15,7 @@ export async function GET(
     }
 
     try {
-        const workbook = db.prepare("SELECT * FROM workbooks WHERE id = ?").get(id) as any;
+        const workbook = await db.getOne("SELECT * FROM workbooks WHERE id = ?", [id]);
         if (!workbook) {
             return NextResponse.json({ error: "Workbook not found" }, { status: 404 });
         }
