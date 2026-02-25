@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:prod": "concurrently -n \"web,worker\" -c \"cyan,magenta\" \"next start\" \"npx tsx src/worker/index.ts\"",
     "lint": "eslint"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
     "better-sqlite3": "^12.6.2",
     "bullmq": "^5.70.1",
     "clsx": "^2.1.1",
+    "concurrently": "^9.2.1",
     "ioredis": "^5.9.3",
     "lucide-react": "^0.574.0",
     "next": "16.1.6",

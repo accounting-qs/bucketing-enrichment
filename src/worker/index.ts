@@ -11,15 +11,8 @@ import { BucketNode } from '../types';
 import { mapBatchToTaxonomy, TaxonomyNode } from '../lib/ai';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const PORT = process.env.PORT || 10000;
 
-// Render Free tier expects a web service to listen on a port
-http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('Worker is alive');
-}).listen(PORT, () => {
-    console.log(`>>> Worker health-check server listening on port ${PORT}`);
-});
+// No dummy HTTP server needed here anymore as Next.js handles the listening port
 
 console.log(`>>> WORKER PROCESS INITIALIZED [PID: ${process.pid}]`);
 console.log('>>> WORKER CONNECTING TO REDIS:', REDIS_URL.split('@').pop());
