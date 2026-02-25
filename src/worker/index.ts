@@ -21,9 +21,15 @@ http.createServer((req, res) => {
     console.log(`>>> Worker health-check server listening on port ${PORT}`);
 });
 
+console.log(`>>> WORKER PROCESS INITIALIZED [PID: ${process.pid}]`);
+console.log('>>> WORKER CONNECTING TO REDIS:', REDIS_URL.split('@').pop());
+
 const connection = new IORedis(REDIS_URL, {
     maxRetriesPerRequest: null,
 });
+
+connection.on('connect', () => console.log('>>> REDIS CONNECTED'));
+connection.on('error', (err) => console.error('>>> REDIS ERROR:', err));
 
 console.log('>>> Background Worker Starting...');
 

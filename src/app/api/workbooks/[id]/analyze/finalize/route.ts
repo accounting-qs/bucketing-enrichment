@@ -29,7 +29,7 @@ export async function POST(
         `, [jobId, 'queued', 0, 'Job added to queue...', new Date().toISOString()]);
 
         // Add to BullMQ
-        await analyzeQueue.add('workbook-analysis', {
+        const job = await analyzeQueue.add('workbook-analysis', {
             jobId,
             workbookId: id,
             options: {
@@ -39,6 +39,8 @@ export async function POST(
                 provider
             }
         });
+
+        console.log(`>>> JOB ADDED TO BULLMQ: ${job.id} for workbook: ${id}`);
 
         console.log(`>>> PROMOTED ANALYSIS TO BACKGROUND JOB: ${jobId}`);
 

@@ -88,11 +88,12 @@ if (isProduction) {
  */
 export async function query(sql: string, params: any[] = []): Promise<any> {
   if (pgPool) {
-    // Convert ? to $1, $2 for Postgres
+    // Convert all ? to $1, $2, etc. for Postgres
     let pgSql = sql;
-    params.forEach((_, i) => {
-      pgSql = pgSql.replace('?', `$${i + 1}`);
-    });
+    let i = 1;
+    while (pgSql.includes('?')) {
+      pgSql = pgSql.replace('?', `$${i++}`);
+    }
     const res = await pgPool.query(pgSql, params);
     // Map lowercase Postgres keys to CamelCase used in the app
     return res.rows.map(row => {
