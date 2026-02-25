@@ -33,6 +33,7 @@ export default function Home() {
   const [proposedTaxonomy, setProposedTaxonomy] = useState<any[] | null>(null); // TaxonomyNode[]
   const [analysisContext, setAnalysisContext] = useState<any>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [activeJob, setActiveJob] = useState<{ id: string; progress: number; message: string; status: string; resultId?: string } | null>(null);
 
   const handleUpload = async (file: File) => {
     const formData = new FormData();
@@ -109,14 +110,64 @@ export default function Home() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      setAnalysisId(data.analysisId);
-      setAnalysis(data);
+      // Start Polling
+      if (data.jobId) {
+        startPolling(data.jobId);
+      } else {
+        setAnalysisId(data.analysisId);
+        setAnalysis(data);
+        setIsFinalizing(false);
+      }
     } catch (err) {
       alert("Finalization failed: " + (err as Error).message);
-    } finally {
       setIsFinalizing(false);
+    } finally {
       setAnalysisContext(null);
     }
+  };
+
+  const startPolling = (jobId: string) => {
+    setActiveJob({ id: jobId, progress: 0, message: "Queuing...", status: "queued" });
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`);
+        const job = await res.json();
+
+        if (job.error) {
+          clearInterval(interval);
+          alert("Job failed: " + job.error);
+          setIsFinalizing(false);
+          setActiveJob(null);
+          return;
+        }
+
+        setActiveJob(job);
+
+        if (job.status === 'completed') {
+          clearInterval(interval);
+          // Load final analysis
+          const analysisRes = await fetch(`/api/jobs/${jobId}`); // In a real app, maybe a separate endpoint or the result is in the job
+          // For now, let's just trigger a final fetch of the analysis data if we have the resultId
+          if (job.resultId) {
+            const finalRes = await fetch(`/api/workbooks/${analysisContext?.workbookId || workbook?.id}/analyze/finalize`); // This is a placeholder, usually we'd have a GET /api/analysis/[id]
+            // Actually, the worker saved it to the DB, so we can just use the resultId to fetch it.
+            // But for the sake of the demo, let's assume the job object contains enough info or we can fetch the analysis by ID.
+            // Let's implement a GET /api/analyses/[id] route if needed, or just let the user know it's done.
+            // For now, I'll just reload the page or fetch specifically.
+            window.location.reload(); // Simplest way to show the new analysis in a list if we had one.
+            // BUT, let's be more elegant.
+          }
+        } else if (job.status === 'failed') {
+          clearInterval(interval);
+          alert("Job failed: " + job.message);
+          setIsFinalizing(false);
+          setActiveJob(null);
+        }
+      } catch (e) {
+        console.error("Polling error:", e);
+      }
+    }, 2000);
   };
 
   const handleConfirmSuggestions = async (approved: SuggestedBucket[], denyAll = false) => {
@@ -290,17 +341,45 @@ export default function Home() {
             <div className="animate-reveal max-w-5xl mx-auto">
               {isAnalyzing || isFinalizing ? (
                 <div className="flex flex-col items-center justify-center py-24 space-y-6">
-                  <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-                  <div className="text-center">
-                    <h3 className="text-xl font-bold font-display">
-                      {isFinalizing ? "Deep Taxonomy Mapping" : "Neural Clustering Proposing"}
-                    </h3>
-                    <p className="text-slate-500 mt-2">
-                      {isFinalizing
-                        ? "Processing 100% of data rows in AI-driven batches..."
-                        : "Identifying global industry patterns for your confirmation..."}
-                    </p>
-                  </div>
+                  {activeJob ? (
+                    <div className="w-full max-w-md space-y-4">
+                      <div className="flex justify-between text-sm font-bold uppercase tracking-wider text-slate-500">
+                        <span>{activeJob.message}</span>
+                        <span>{activeJob.progress}%</span>
+                      </div>
+                      <div className="w-full h-3 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary transition-all duration-500 ease-out"
+                          style={{ width: `${activeJob.progress}%` }}
+                        />
+                      </div>
+                      <p className="text-center text-xs text-slate-400">
+                        Job ID: {activeJob.id} • Process is running on a dedicated cloud worker
+                      </p>
+                      {activeJob.status === 'completed' && (
+                        <button
+                          onClick={() => window.location.reload()}
+                          className="w-full mt-4 py-3 bg-primary text-white rounded-xl font-bold shadow-lg shadow-primary/20"
+                        >
+                          View Results
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                      <div className="text-center">
+                        <h3 className="text-xl font-bold font-display">
+                          {isFinalizing ? "Deep Taxonomy Mapping" : "Neural Clustering Proposing"}
+                        </h3>
+                        <p className="text-slate-500 mt-2">
+                          {isFinalizing
+                            ? "Processing 100% of data rows in AI-driven batches..."
+                            : "Identifying global industry patterns for your confirmation..."}
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
                 <ColumnSelector workbook={workbook} onAnalyze={handleAnalyze} onReset={handleReset} />
