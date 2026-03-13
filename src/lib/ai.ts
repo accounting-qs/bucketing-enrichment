@@ -106,11 +106,12 @@ export async function mapBatchToTaxonomy(
     ${JSON.stringify(batchValues)}
 
     GOAL:
-    1. CRITICAL: You MUST map EVERY single value in the "BATCH VALUES TO MAP" list. Do not skip any.
-    2. Assign each value to the most specific Child or Leaf bucket available.
-    3. If a value fits a Parent but no existing Child, you may suggest a NEW Child bucket.
-    4. If a value truly does not fit ANY category, assign it to the path ["General / Unformatted"].
-    5. Return the PATH to the assigned bucket (e.g., "Real Estate > Residential").
+    1. CRITICAL: You MUST map EVERY single value in the "BATCH VALUES TO MAP" list.
+    2. BE AGGRESSIVE: Do NOT use "General / Unformatted" unless the value is completely unreadable or nonsensical.
+    3. BEST FIT: Even if a value doesn't match 100%, assign it to the Parent/Category that makes the most sense.
+    4. SPECIFICITY: Assign to the deepest possible level (Leaf) of the taxonomy provided.
+    5. NEW BUCKETS: If a value fits a Parent but none of its existing Children, definitely suggest a new Child name within that Parent.
+    6. Return the full PATH as an array of strings (e.g., ["Real Estate", "Residential"]).
 
     OUTPUT FORMAT (JSON):
     {

@@ -41,11 +41,18 @@ function buildBucketTree(nodes: TaxonomyNode[], depth: number = 0): BucketNode[]
 }
 
 function findDeepMatch(nodes: BucketNode[], searchValue: string): BucketNode | undefined {
-    const lowerSearch = searchValue.toLowerCase();
+    const lowerSearch = searchValue.toLowerCase().trim();
+    if (!lowerSearch) return undefined;
+
     for (const node of nodes) {
         if (node.name === "General / Unformatted") continue;
-        const lowerNode = node.name.toLowerCase();
-        if (lowerSearch.includes(lowerNode) || lowerNode.includes(lowerSearch)) return node;
+        const lowerNode = node.name.toLowerCase().trim();
+        
+        // Exact match or contains
+        if (lowerSearch === lowerNode || lowerSearch.includes(lowerNode) || lowerNode.includes(lowerSearch)) {
+            return node;
+        }
+        
         if (node.children && node.children.length > 0) {
             const childMatch = findDeepMatch(node.children, searchValue);
             if (childMatch) return childMatch;
@@ -101,16 +108,21 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         const BATCH_SIZE = 50;
         const nodeToPath: Map<string, BucketNode[]> = new Map();
 
+        // Create a lookup for confirmed root buckets for faster access
+        const rootLookup = new Map<string, BucketNode>();
+        rootBuckets.forEach(b => rootLookup.set(b.name.toLowerCase(), b));
+
         // 3. AI Mapping Phase
         await db.query(`UPDATE jobs SET message = ?, progress = 10, updatedAt = ? WHERE id = ?`,
             ['AI Mapping unique values...', new Date().toISOString(), jobId]);
 
+        let totalMappingsReceived = 0;
         for (let i = 0; i < allUniqueStrings.length; i += BATCH_SIZE) {
             const batch = allUniqueStrings.slice(i, i + BATCH_SIZE);
-            const batchProgress = 10 + Math.floor((i / allUniqueStrings.length) * 40); // 10% to 50%
+            const batchProgress = 10 + Math.floor((i / allUniqueStrings.length) * 40); 
 
             await db.query(`UPDATE jobs SET progress = ?, updatedAt = ? WHERE id = ?`, [batchProgress, new Date().toISOString(), jobId]);
-            console.log(`>>> Job [${jobId}] Mapping Batch ${i / BATCH_SIZE + 1}...`);
+            console.log(`>>> Job [${jobId}] Mapping Batch ${i / BATCH_SIZE + 1}/${Math.ceil(allUniqueStrings.length / BATCH_SIZE)}...`);
 
             let result: any = null;
             let retries = 3;
@@ -129,16 +141,20 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             }
 
             if (result?.mappings) {
+                totalMappingsReceived += result.mappings.length;
                 result.mappings.forEach((m: any) => {
                     if (!m.path || m.path.length === 0) return;
 
-                    let parentNode: BucketNode | undefined = undefined;
-                    let targetNode: BucketNode | undefined;
+                    // Support both string paths and array paths from AI
+                    const pathArray = Array.isArray(m.path) ? m.path : m.path.split('>').map((s: string) => s.trim());
+                    
+                    let currParent: BucketNode | undefined = undefined;
+                    let lastNode: BucketNode | undefined;
 
-                    for (let d = 0; d < m.path.length; d++) {
-                        const segment = m.path[d];
-                        const siblings: BucketNode[] = parentNode ? parentNode.children : rootBuckets;
-                        let node: BucketNode | undefined = siblings.find((b: BucketNode) => b.name.toLowerCase() === segment.toLowerCase());
+                    for (let d = 0; d < pathArray.length; d++) {
+                        const segment = pathArray[d];
+                        const siblings: BucketNode[] = currParent ? currParent.children : rootBuckets;
+                        let node: BucketNode | undefined = siblings.find((b: BucketNode) => b.name.toLowerCase().trim() === segment.toLowerCase().trim());
 
                         if (!node) {
                             node = {
@@ -148,28 +164,27 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                                 childrenCount: 0,
                                 children: [],
                                 rowIndices: [],
-                                depth: parentNode ? parentNode.depth + 1 : 0
+                                depth: currParent ? currParent.depth + 1 : 0
                             };
                             siblings.push(node);
-                            if (parentNode) parentNode.childrenCount++;
+                            if (currParent) currParent.childrenCount++;
                         }
-                        parentNode = node;
-                        targetNode = node;
+                        currParent = node;
+                        lastNode = node;
                     }
 
-                    if (m.value && targetNode) {
-                        const foundKey = batch.find(k => k.toLowerCase().trim() === m.value.toLowerCase().trim());
-                        if (foundKey) {
-                            valueMap[foundKey] = targetNode;
-                        } else if (valueMap.hasOwnProperty(m.value)) {
-                            valueMap[m.value] = targetNode;
-                        }
-                        const fullPath = findPathToNode(rootBuckets, targetNode.id);
-                        if (fullPath) nodeToPath.set(targetNode.id, fullPath);
+                    if (m.value && lastNode) {
+                        // Use case-insensitive mapping to be robust
+                        const originalKey = batch.find(k => k.toLowerCase().trim() === m.value.toLowerCase().trim()) || m.value;
+                        valueMap[originalKey.toLowerCase().trim()] = lastNode;
+                        
+                        const fullPath = findPathToNode(rootBuckets, lastNode.id);
+                        if (fullPath) nodeToPath.set(lastNode.id, fullPath);
                     }
                 });
             }
         }
+        console.log(`>>> Job [${jobId}] AI Mapping done. Total mappings processed: ${totalMappingsReceived}`);
 
         // 4. Streaming Full CSV Assignment Phase
         await db.query(`UPDATE jobs SET message = ?, progress = 55, updatedAt = ? WHERE id = ?`,
@@ -183,18 +198,22 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 header: true,
                 skipEmptyLines: true,
                 step: (results: any) => {
-                    const val = results.data[selectedColumn]?.toString().trim();
+                    const rawVal = results.data[selectedColumn]?.toString();
+                    const val = rawVal?.trim();
+                    
                     if (!val) {
                         generalBucket.rowIndices.push(rowIndex);
                         generalBucket.rowCount++;
                     } else {
-                        let target: BucketNode | undefined = valueMap[val];
+                        const lookupKey = val.toLowerCase();
+                        let target: BucketNode | undefined = valueMap[lookupKey];
 
                         if (!target) {
                             target = findDeepMatch(rootBuckets, val);
                         }
 
                         if (target) {
+                            // Increment all parents in the path
                             const path = nodeToPath.get(target.id) || findPathToNode(rootBuckets, target.id);
                             if (path) {
                                 path.forEach(node => {
