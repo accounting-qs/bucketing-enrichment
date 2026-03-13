@@ -146,17 +146,22 @@ export default function Home() {
 
         if (job.status === 'completed') {
           clearInterval(interval);
-          // Load final analysis
-          const analysisRes = await fetch(`/api/jobs/${jobId}`); // In a real app, maybe a separate endpoint or the result is in the job
-          // For now, let's just trigger a final fetch of the analysis data if we have the resultId
           if (job.resultId) {
-            const finalRes = await fetch(`/api/workbooks/${analysisContext?.workbookId || workbook?.id}/analyze/finalize`); // This is a placeholder, usually we'd have a GET /api/analysis/[id]
-            // Actually, the worker saved it to the DB, so we can just use the resultId to fetch it.
-            // But for the sake of the demo, let's assume the job object contains enough info or we can fetch the analysis by ID.
-            // Let's implement a GET /api/analyses/[id] route if needed, or just let the user know it's done.
-            // For now, I'll just reload the page or fetch specifically.
-            window.location.reload(); // Simplest way to show the new analysis in a list if we had one.
-            // BUT, let's be more elegant.
+            try {
+              const finalRes = await fetch(`/api/analyses/${job.resultId}`);
+              const analysisData = await finalRes.json();
+              
+              if (analysisData.error) throw new Error(analysisData.error);
+              
+              setAnalysisId(job.resultId);
+              setAnalysis(analysisData);
+              setIsFinalizing(false);
+              setActiveJob(null);
+            } catch (e) {
+              console.error("Failed to fetch final analysis:", e);
+              alert("Analysis complete, but failed to load results. Please try refreshing.");
+              setIsFinalizing(false);
+            }
           }
         } else if (job.status === 'failed') {
           clearInterval(interval);
@@ -358,7 +363,16 @@ export default function Home() {
                       </p>
                       {activeJob.status === 'completed' && (
                         <button
-                          onClick={() => window.location.reload()}
+                          onClick={async () => {
+                            if (activeJob.resultId) {
+                              const res = await fetch(`/api/analyses/${activeJob.resultId}`);
+                              const data = await res.json();
+                              setAnalysis(data);
+                              setAnalysisId(activeJob.resultId);
+                              setIsFinalizing(false);
+                              setActiveJob(null);
+                            }
+                          }}
                           className="w-full mt-4 py-3 bg-primary text-white rounded-xl font-bold shadow-lg shadow-primary/20"
                         >
                           View Results

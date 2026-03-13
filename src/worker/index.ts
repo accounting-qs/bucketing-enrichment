@@ -26,7 +26,7 @@ connection.on('error', (err) => console.error('>>> REDIS ERROR:', err));
 
 console.log('>>> Background Worker Starting...');
 
-// --- Helper Functions ---
+// --- Helper Functions ---|
 
 function buildBucketTree(nodes: TaxonomyNode[], depth: number = 0): BucketNode[] {
     return nodes.map(node => ({
