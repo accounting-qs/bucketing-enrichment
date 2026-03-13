@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 export default function Home() {
+  console.log(">>> Quantum Enricher v1.0.2 - Live results fix active");
   const [workbook, setWorkbook] = useState<Workbook | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
