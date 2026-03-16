@@ -120,11 +120,22 @@ export default function ColumnSelector({
                         <select
                             id="provider-select"
                             className="w-full bg-slate-100 dark:bg-zinc-900 border-2 border-transparent focus:border-primary rounded-xl px-5 py-3.5 text-sm font-bold outline-none cursor-pointer transition-all"
+                            defaultValue="claude:claude-3-7-sonnet-latest"
                         >
-                            <option value="none">Deterministic (No AI)</option>
-                            <option value="claude">Anthropic Claude 4.6 (SOTA Agent)</option>
-                            <option value="gemini">Google Gemini 3 (Ultra Flash)</option>
-                            <option value="openai">OpenAI GPT-5.3 (Codex Max)</option>
+                            <option value="none" className="font-semibold text-slate-500">Deterministic (No AI)</option>
+                            <optgroup label="Anthropic (Claude)" className="font-bold">
+                                <option value="claude:claude-3-7-sonnet-latest">Claude 3.7 Sonnet (Latest & Best)</option>
+                                <option value="claude:claude-3-5-haiku-latest">Claude 3.5 Haiku (Fast)</option>
+                            </optgroup>
+                            <optgroup label="Google (Gemini)" className="font-bold">
+                                <option value="gemini:gemini-2.5-pro">Gemini 2.5 Pro (Powerful)</option>
+                                <option value="gemini:gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
+                            </optgroup>
+                            <optgroup label="OpenAI (GPT)" className="font-bold">
+                                <option value="openai:gpt-4o">GPT-4o (Versatile)</option>
+                                <option value="openai:o3-mini">o3-mini (Reasoning)</option>
+                                <option value="openai:gpt-4o-mini">GPT-4o Mini (Fast)</option>
+                            </optgroup>
                         </select>
                     </div>
 

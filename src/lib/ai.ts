@@ -12,7 +12,7 @@ export interface TaxonomyNode {
 export async function proposeTaxonomy(
   columnName: string,
   sampleValues: Array<{ value: string; count: number }>,
-  provider: "gemini" | "openai" | "claude",
+  providerInput: string,
   guide?: any[] | null
 ): Promise<TaxonomyNode[]> {
   const prompt = `
@@ -48,6 +48,12 @@ export async function proposeTaxonomy(
   const commonSystem = "Return JSON only. No markdown. No text outside the array.";
 
   try {
+    let provider = providerInput;
+    let actualModel = "";
+    if (providerInput.includes(':')) {
+      [provider, actualModel] = providerInput.split(':');
+    }
+
     const apiKey = getApiKey(provider);
     if (!apiKey) return [];
 
@@ -55,7 +61,7 @@ export async function proposeTaxonomy(
     if (provider === "openai") {
       const openai = new OpenAI({ apiKey });
       const res = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: actualModel || "gpt-4o",
         messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
         response_format: { type: "json_object" }
       });
@@ -63,14 +69,14 @@ export async function proposeTaxonomy(
     } else if (provider === "claude") {
       const anthropic = new Anthropic({ apiKey });
       const res = await anthropic.messages.create({
-        model: "claude-3-5-sonnet-20240620",
+        model: actualModel || "claude-3-7-sonnet-latest",
         max_tokens: 4000,
         messages: [{ role: "user", content: prompt + "\n\n" + commonSystem }],
       });
       responseText = res.content[0].type === 'text' ? res.content[0].text : '[]';
     } else {
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const model = genAI.getGenerativeModel({ model: actualModel || "gemini-2.5-flash" });
       const res = await model.generateContent(prompt + "\n\n" + commonSystem);
       responseText = res.response.text();
     }
@@ -88,7 +94,7 @@ export async function mapBatchToTaxonomy(
   columnName: string,
   batchValues: string[],
   parentBuckets: TaxonomyNode[],
-  provider: "gemini" | "openai" | "claude"
+  providerInput: string
 ): Promise<any> {
   // Simplify the tree for the prompt to save tokens, just sending names structure
   const simplifiedStructure = JSON.stringify(parentBuckets, (key, value) => {
@@ -127,6 +133,12 @@ export async function mapBatchToTaxonomy(
   const commonSystem = "Return JSON only. No markdown.";
 
   try {
+    let provider = providerInput;
+    let actualModel = "";
+    if (providerInput.includes(':')) {
+      [provider, actualModel] = providerInput.split(':');
+    }
+
     const apiKey = getApiKey(provider);
     if (!apiKey) return { mappings: [] };
 
@@ -134,7 +146,7 @@ export async function mapBatchToTaxonomy(
     if (provider === "openai") {
       const openai = new OpenAI({ apiKey });
       const res = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: actualModel || "gpt-4o",
         messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
         response_format: { type: "json_object" }
       });
@@ -142,14 +154,14 @@ export async function mapBatchToTaxonomy(
     } else if (provider === "claude") {
       const anthropic = new Anthropic({ apiKey });
       const res = await anthropic.messages.create({
-        model: "claude-3-5-sonnet-20240620",
+        model: actualModel || "claude-3-7-sonnet-latest",
         max_tokens: 4000,
         messages: [{ role: "user", content: prompt + "\n\n" + commonSystem }],
       });
       responseText = res.content[0].type === 'text' ? res.content[0].text : '{}';
     } else {
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const model = genAI.getGenerativeModel({ model: actualModel || "gemini-2.5-flash" });
       const res = await model.generateContent(prompt + "\n\n" + commonSystem);
       responseText = res.response.text();
     }
