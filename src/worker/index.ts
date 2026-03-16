@@ -300,7 +300,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             await db.query(`UPDATE jobs SET message = ?, progress = 90, updatedAt = ? WHERE id = ?`,
                 ['Auto-discovering missing data clusters...', new Date().toISOString(), jobId]);
             
-            const wordCounts: Record<string, number[]> = {};
+            const wordCounts: Record<string, number[]> = Object.create(null);
             const stopWords = new Set(['and', 'the', 'for', 'inc', 'llc', 'ltd', 'corp', 'company', 'group', 'services', 'solutions', 'management', 'international', 'associates', 'technologies', 'technology', 'system', 'systems', 'llp', 'pllc']);
             
             // Extract keywords
@@ -309,7 +309,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 const uniqueTokens = Array.from(new Set(tokens.filter(t => !stopWords.has(t))));
                 
                 uniqueTokens.forEach(t => {
-                    if (!wordCounts[t]) wordCounts[t] = [];
+                    if (!Array.isArray(wordCounts[t])) wordCounts[t] = [];
                     wordCounts[t].push(row.index);
                 });
             }
