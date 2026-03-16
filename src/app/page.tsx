@@ -18,7 +18,8 @@ import {
   Bell,
   Sparkles,
   Plus,
-  ChevronRight
+  ChevronRight,
+  DownloadCloud
 } from "lucide-react";
 
 export default function Home() {
@@ -27,6 +28,7 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [selectedBucket, setSelectedBucket] = useState<BucketNode | null>(null);
+  const [checkedBucketIds, setCheckedBucketIds] = useState<Set<string>>(new Set());
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Human-in-the-loop state
@@ -213,8 +215,49 @@ export default function Home() {
     setAnalysis(null);
     setAnalysisId(null);
     setSelectedBucket(null);
+    setCheckedBucketIds(new Set());
     setPendingSuggestions(null);
     setAnalysisContext(null);
+  };
+
+  const handleCheckToggle = (node: BucketNode, checked: boolean) => {
+    const newChecked = new Set(checkedBucketIds);
+    
+    // helper to get all children ids recursively
+    const getAllIds = (n: BucketNode): string[] => {
+      let ids = [n.id];
+      if (n.children) {
+        n.children.forEach(c => { ids = ids.concat(getAllIds(c)) });
+      }
+      return ids;
+    };
+
+    const nodeAndChildrenIds = getAllIds(node);
+    
+    if (checked) {
+      nodeAndChildrenIds.forEach(id => newChecked.add(id));
+    } else {
+      nodeAndChildrenIds.forEach(id => newChecked.delete(id));
+    }
+    
+    setCheckedBucketIds(newChecked);
+  };
+
+  const getSelectedRowCount = () => {
+    if (!analysis) return 0;
+    
+    let total = 0;
+    const walk = (nodes: BucketNode[]) => {
+      for (const n of nodes) {
+        if (checkedBucketIds.has(n.id)) {
+          total += n.rowCount;
+        } else if (n.children) {
+          walk(n.children);
+        }
+      }
+    };
+    walk(analysis.rootBuckets);
+    return total;
   };
 
   return (
@@ -429,6 +472,8 @@ export default function Home() {
                     nodes={analysis.rootBuckets}
                     onSelect={setSelectedBucket}
                     selectedId={selectedBucket?.id || null}
+                    checkedIds={checkedBucketIds}
+                    onCheckToggle={handleCheckToggle}
                   />
                 </div>
                 <div className="flex-1 overflow-hidden">
@@ -443,6 +488,37 @@ export default function Home() {
           )}
         </main>
       </div>
+      
+      {/* Floating Action Bar */}
+      {analysis && checkedBucketIds.size > 0 && (
+        <div className="fixed bottom-6 inset-x-0 mx-auto w-max max-w-2xl bg-slate-900 text-slate-100 px-6 py-4 rounded-full shadow-2xl flex items-center justify-between gap-8 z-50 animate-reveal border border-slate-700">
+          <div className="flex items-center gap-3">
+            <span className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold">
+              {checkedBucketIds.size}
+            </span>
+            <div className="flex flex-col">
+              <span className="text-sm font-bold">Carpetas Seleccionadas</span>
+              <span className="text-[11px] text-slate-400 font-medium">{getSelectedRowCount().toLocaleString()} contactos totales</span>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setCheckedBucketIds(new Set())}
+              className="text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+            >
+              Limpiar
+            </button>
+            <button 
+              className="bg-primary hover:bg-emerald-600 text-white font-bold py-2 px-5 rounded-full text-sm shadow-lg shadow-primary/20 transition-all flex items-center gap-2"
+              onClick={() => alert('Exporting phase coming next!')}
+            >
+              <DownloadCloud className="w-4 h-4" />
+              Exportar CSV
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

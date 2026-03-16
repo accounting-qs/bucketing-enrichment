@@ -13,11 +13,15 @@ function cn(...inputs: ClassValue[]) {
 export default function FinderTree({
     nodes,
     onSelect,
-    selectedId
+    selectedId,
+    checkedIds = new Set(),
+    onCheckToggle
 }: {
     nodes: BucketNode[];
     onSelect: (node: BucketNode) => void;
     selectedId: string | null;
+    checkedIds?: Set<string>;
+    onCheckToggle?: (node: BucketNode, checked: boolean) => void;
 }) {
     return (
         <div className="flex flex-col h-full bg-white dark:bg-zinc-950">
@@ -36,6 +40,8 @@ export default function FinderTree({
                         node={node}
                         onSelect={onSelect}
                         selectedId={selectedId}
+                        checkedIds={checkedIds}
+                        onCheckToggle={onCheckToggle}
                         depth={0}
                     />
                 ))}
@@ -48,15 +54,20 @@ function TreeNode({
     node,
     onSelect,
     selectedId,
+    checkedIds,
+    onCheckToggle,
     depth
 }: {
     node: BucketNode;
     onSelect: (node: BucketNode) => void;
     selectedId: string | null;
+    checkedIds: Set<string>;
+    onCheckToggle?: (node: BucketNode, checked: boolean) => void;
     depth: number;
 }) {
     const [isOpen, setIsOpen] = useState(depth < 1);
     const isSelected = selectedId === node.id;
+    const isChecked = checkedIds.has(node.id);
     const hasChildren = node.children && node.children.length > 0;
 
     return (
@@ -74,11 +85,25 @@ function TreeNode({
                 )}
                 style={{ paddingLeft: `${(depth * 16) + 16}px` }}
             >
-                <div className="w-4 h-4 flex items-center justify-center">
+                <div className="w-4 h-4 flex items-center justify-center pointer-events-none">
                     {hasChildren ? (
                         isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />
                     ) : null}
                 </div>
+
+                {onCheckToggle && (
+                    <div className="flex items-center" onClick={(e) => {
+                        e.stopPropagation();
+                        onCheckToggle(node, !isChecked);
+                    }}>
+                        <input 
+                            type="checkbox" 
+                            checked={isChecked}
+                            onChange={() => {}} // Handle on parent div
+                            className="w-4 h-4 rounded border-slate-300 text-primary focus:ring-primary cursor-pointer"
+                        />
+                    </div>
+                )}
 
                 <div className={cn(
                     "flex items-center gap-2",
@@ -111,6 +136,8 @@ function TreeNode({
                             node={child}
                             onSelect={onSelect}
                             selectedId={selectedId}
+                            checkedIds={checkedIds}
+                            onCheckToggle={onCheckToggle}
                             depth={depth + 1}
                         />
                     ))}
