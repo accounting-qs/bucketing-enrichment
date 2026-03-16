@@ -9,6 +9,7 @@ import Papa from 'papaparse';
 import fsStream from 'fs';
 import { BucketNode } from '../types';
 import { mapBatchToTaxonomy, TaxonomyNode } from '../lib/ai';
+import { Database } from 'duckdb-async';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
@@ -236,64 +237,71 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         }
         console.log(`>>> Job [${jobId}] AI Mapping done. Total mappings processed: ${totalMappingsReceived}`);
 
-        // 4. Streaming Full CSV Assignment Phase
+        // 4. Grouping & Assigning Phase using DuckDB
         await db.query(`UPDATE jobs SET message = ?, progress = 55, updatedAt = ? WHERE id = ?`,
-            ['Reading large CSV file...', new Date().toISOString(), jobId]);
+            ['Reading large CSV file... (DuckDB)', new Date().toISOString(), jobId]);
 
-        const fileStream = fsStream.createReadStream(workbook.storagePath);
-        let rowIndex = 0;
         const unmappedRows: { index: number, value: string }[] = [];
+        let totalRowsProcessed = 0;
 
-        await new Promise((resolve, reject) => {
-            Papa.parse(fileStream, {
-                header: true,
-                skipEmptyLines: true,
-                step: (results: any) => {
-                    const rawVal = results.data[selectedColumn]?.toString();
-                    const val = rawVal?.trim();
-                    
-                    if (!val) {
-                        generalBucket.rowIndices.push(rowIndex);
-                        generalBucket.rowCount++;
+        const duckDB = await Database.create(':memory:');
+        const safePath = workbook.storagePath.replace(/'/g, "''");
+        // We use row_number()-1 to get 0-based CSV rows for consistent row-indexing
+        const duckQuery = `
+            SELECT "${selectedColumn}" as val, list(row_idx) as indices, count(*) as row_count
+            FROM (
+                SELECT row_number() OVER () - 1 as row_idx, * 
+                FROM read_csv('${safePath}', header=True, auto_detect=True)
+            )
+            GROUP BY "${selectedColumn}"
+        `;
+        
+        const groupedRows = await duckDB.all(duckQuery);
+        
+        for (const row of groupedRows) {
+            const val = row.val?.toString().trim();
+            const indices: number[] = Array.isArray(row.indices) ? row.indices.map((i: any) => Number(i)) : [];
+            const count = Number(row.row_count || 0);
+            
+            totalRowsProcessed += count;
+
+            if (!val) {
+                generalBucket.rowIndices.push(...indices);
+                generalBucket.rowCount += count;
+            } else {
+                const lookupKey = val.toLowerCase();
+                let target: BucketNode | undefined = valueMap[lookupKey];
+
+                if (!target) {
+                    target = findFuzzyMatch(rootBuckets, val);
+                }
+
+                if (target) {
+                    const path = nodeToPath.get(target.id) || findPathToNode(rootBuckets, target.id);
+                    if (path) {
+                        path.forEach(node => {
+                            node.rowCount += count;
+                        });
+                        target.rowIndices.push(...indices);
                     } else {
-                        const lookupKey = val.toLowerCase();
-                        let target: BucketNode | undefined = valueMap[lookupKey];
-
-                        if (!target) {
-                            // FAST SMART FALLBACK: If AI didn't map it (or it wasn't sent to AI), use fuzzy local matching
-                            target = findFuzzyMatch(rootBuckets, val);
-                        }
-
-                        if (target) {
-                            // Increment all parents in the path
-                            const path = nodeToPath.get(target.id) || findPathToNode(rootBuckets, target.id);
-                            if (path) {
-                                path.forEach(node => {
-                                    node.rowCount++;
-                                });
-                                target.rowIndices.push(rowIndex);
-                            } else {
-                                target.rowCount++;
-                                target.rowIndices.push(rowIndex);
-                            }
-                        } else {
-                            if (val) unmappedRows.push({ index: rowIndex, value: val });
-                            generalBucket.rowIndices.push(rowIndex);
-                            generalBucket.rowCount++;
-                        }
+                        target.rowCount += count;
+                        target.rowIndices.push(...indices);
                     }
-                    rowIndex++;
+                } else {
+                    // For the unmapped rows, we push individual properties so auto-discovery can process them later
+                    const mappedIndices = indices.map(idx => ({ index: idx, value: val }));
+                    unmappedRows.push(...mappedIndices);
+                    
+                    generalBucket.rowIndices.push(...indices);
+                    generalBucket.rowCount += count;
+                }
+            }
+        }
+        
+        await duckDB.close();
 
-                    // Progress every 5000 rows
-                    if (rowIndex % 5000 === 0) {
-                        const csvProgress = 60 + Math.min(35, Math.floor((rowIndex / workbook.rowCount) * 35));
-                        db.query(`UPDATE jobs SET progress = ?, updatedAt = ? WHERE id = ?`, [csvProgress, new Date().toISOString(), jobId]).catch(() => { });
-                    }
-                },
-                complete: resolve,
-                error: reject
-            });
-        });
+        // Update progress since DuckDB is super fast, it happens all at once
+        await db.query(`UPDATE jobs SET progress = 85, updatedAt = ? WHERE id = ?`, [new Date().toISOString(), jobId]).catch(() => { });
 
         // 5. Semantic Auto-Discovery Phase (Breaking The General Bucket)
         if (unmappedRows.length > 0) {
@@ -361,7 +369,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 uniqueValues: sortedUniqueStrings.length,
                 aiMapped: totalMappingsReceived,
                 emptyCount: generalBucket.rowCount,
-                totalProcessed: rowIndex
+                totalProcessed: totalRowsProcessed
             }
         };
 
