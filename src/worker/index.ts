@@ -61,6 +61,47 @@ function findDeepMatch(nodes: BucketNode[], searchValue: string): BucketNode | u
     return undefined;
 }
 
+// Advanced long-tail fuzzy matcher
+function findFuzzyMatch(nodes: BucketNode[], searchValue: string): BucketNode | undefined {
+    const exact = findDeepMatch(nodes, searchValue);
+    if (exact) return exact;
+
+    const lowerSearchTokens = searchValue.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
+    if (lowerSearchTokens.length === 0) return undefined;
+
+    let bestMatch: BucketNode | undefined;
+    let maxMatchScore = 0;
+
+    function searchFuzzy(nodeList: BucketNode[]) {
+        for (const node of nodeList) {
+            if (node.name === "General / Unformatted") continue;
+            
+            const nodeTokens = node.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
+            let matchScore = 0;
+            nodeTokens.forEach(nt => {
+                if (lowerSearchTokens.some(st => st === nt || st.includes(nt) || nt.includes(st))) {
+                    matchScore++;
+                }
+            });
+
+            // If we match at least 50% of the significant words of the bucket name
+            if (matchScore > 0 && matchScore >= Math.ceil(nodeTokens.length / 2)) {
+                if (matchScore > maxMatchScore) {
+                    maxMatchScore = matchScore;
+                    bestMatch = node;
+                }
+            }
+
+            if (node.children && node.children.length > 0) {
+                searchFuzzy(node.children);
+            }
+        }
+    }
+    
+    searchFuzzy(nodes);
+    return bestMatch;
+}
+
 function findPathToNode(nodes: BucketNode[], targetId: string, currentPath: BucketNode[] = []): BucketNode[] | null {
     for (const node of nodes) {
         if (node.id === targetId) return [...currentPath, node];
@@ -104,7 +145,16 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         rootBuckets.push(...taxonomyBuckets);
 
         const valueMap: Record<string, BucketNode> = {};
-        const allUniqueStrings = Object.keys(uniqueValues);
+        
+        // OPTIMIZATION: Sort unique values by frequency, and only send the top N to AI.
+        // This is crucial for large datasets (60k+ unique values) to avoid API fatigue and timeouts.
+        const sortedUniqueStrings = Object.entries(uniqueValues)
+            .sort((a, b) => (b[1] as number) - (a[1] as number))
+            .map(entry => entry[0]);
+
+        const MAX_AI_VALUES = 2500;
+        const aiTargetStrings = sortedUniqueStrings.slice(0, MAX_AI_VALUES);
+        
         const BATCH_SIZE = 50;
         const nodeToPath: Map<string, BucketNode[]> = new Map();
 
@@ -112,17 +162,17 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         const rootLookup = new Map<string, BucketNode>();
         rootBuckets.forEach(b => rootLookup.set(b.name.toLowerCase(), b));
 
-        // 3. AI Mapping Phase
+        // 3. AI Mapping Phase (Limited to Top Frequencies)
         await db.query(`UPDATE jobs SET message = ?, progress = 10, updatedAt = ? WHERE id = ?`,
-            ['AI Mapping unique values...', new Date().toISOString(), jobId]);
+            [`AI Mapping top ${aiTargetStrings.length} unique values...`, new Date().toISOString(), jobId]);
 
         let totalMappingsReceived = 0;
-        for (let i = 0; i < allUniqueStrings.length; i += BATCH_SIZE) {
-            const batch = allUniqueStrings.slice(i, i + BATCH_SIZE);
-            const batchProgress = 10 + Math.floor((i / allUniqueStrings.length) * 40); 
+        for (let i = 0; i < aiTargetStrings.length; i += BATCH_SIZE) {
+            const batch = aiTargetStrings.slice(i, i + BATCH_SIZE);
+            const batchProgress = 10 + Math.floor((i / aiTargetStrings.length) * 40); 
 
             await db.query(`UPDATE jobs SET progress = ?, updatedAt = ? WHERE id = ?`, [batchProgress, new Date().toISOString(), jobId]);
-            console.log(`>>> Job [${jobId}] Mapping Batch ${i / BATCH_SIZE + 1}/${Math.ceil(allUniqueStrings.length / BATCH_SIZE)}...`);
+            console.log(`>>> Job [${jobId}] Mapping Batch ${i / BATCH_SIZE + 1}/${Math.ceil(aiTargetStrings.length / BATCH_SIZE)}...`);
 
             let result: any = null;
             let retries = 3;
@@ -209,7 +259,8 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                         let target: BucketNode | undefined = valueMap[lookupKey];
 
                         if (!target) {
-                            target = findDeepMatch(rootBuckets, val);
+                            // FAST SMART FALLBACK: If AI didn't map it (or it wasn't sent to AI), use fuzzy local matching
+                            target = findFuzzyMatch(rootBuckets, val);
                         }
 
                         if (target) {
@@ -250,7 +301,8 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             createdAt: new Date().toISOString(),
             rootBuckets,
             stats: {
-                uniqueValues: allUniqueStrings.length,
+                uniqueValues: sortedUniqueStrings.length,
+                aiMapped: totalMappingsReceived,
                 emptyCount: generalBucket.rowCount,
                 totalProcessed: rowIndex
             }
