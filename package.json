@@ -18,6 +18,7 @@
     "better-sqlite3": "^12.6.2",
     "bullmq": "^5.70.1",
     "clsx": "^2.1.1",
+    "compromise": "^14.15.0",
     "concurrently": "^9.2.1",
     "ioredis": "^5.9.3",
     "lucide-react": "^0.574.0",

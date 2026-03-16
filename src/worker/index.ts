@@ -117,7 +117,7 @@ function findPathToNode(nodes: BucketNode[], targetId: string, currentPath: Buck
 
 const worker = new Worker('workbook-analysis', async (job: Job) => {
     const { jobId, workbookId, options } = job.data;
-    const { selectedColumn, confirmedBuckets, uniqueValues, provider } = options;
+    const { selectedColumn, confirmedBuckets, uniqueValues, provider, minClusterSize = 50 } = options;
 
     try {
         console.log(`>>> Starting Job [${jobId}] for Workbook [${workbookId}]`);
@@ -242,6 +242,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
         const fileStream = fsStream.createReadStream(workbook.storagePath);
         let rowIndex = 0;
+        const unmappedRows: { index: number, value: string }[] = [];
 
         await new Promise((resolve, reject) => {
             Papa.parse(fileStream, {
@@ -276,6 +277,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                                 target.rowIndices.push(rowIndex);
                             }
                         } else {
+                            if (val) unmappedRows.push({ index: rowIndex, value: val });
                             generalBucket.rowIndices.push(rowIndex);
                             generalBucket.rowCount++;
                         }
@@ -293,7 +295,62 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             });
         });
 
-        // 5. Finalize and Save JSON Result
+        // 5. Semantic Auto-Discovery Phase (Breaking The General Bucket)
+        if (unmappedRows.length > 0) {
+            await db.query(`UPDATE jobs SET message = ?, progress = 90, updatedAt = ? WHERE id = ?`,
+                ['Auto-discovering missing data clusters...', new Date().toISOString(), jobId]);
+            
+            const wordCounts: Record<string, number[]> = {};
+            const stopWords = new Set(['and', 'the', 'for', 'inc', 'llc', 'ltd', 'corp', 'company', 'group', 'services', 'solutions', 'management', 'international', 'associates', 'technologies', 'technology', 'system', 'systems', 'llp', 'pllc']);
+            
+            // Extract keywords
+            for (const row of unmappedRows) {
+                const tokens = row.value.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+                const uniqueTokens = Array.from(new Set(tokens.filter(t => !stopWords.has(t))));
+                
+                uniqueTokens.forEach(t => {
+                    if (!wordCounts[t]) wordCounts[t] = [];
+                    wordCounts[t].push(row.index);
+                });
+            }
+
+            // Find clusters surpassing the user-defined threshold (minClusterSize)
+            const autoClusters = Object.entries(wordCounts)
+                .filter(([_, indices]) => indices.length >= minClusterSize)
+                .sort((a, b) => b[1].length - a[1].length);
+
+            const processedIndices = new Set<number>();
+            let autoDiscoveredCount = 0;
+            
+            for (const [word, indices] of autoClusters) {
+                // Keep only indices that haven't been claimed by a bigger auto-cluster
+                const availableIndices = indices.filter(idx => !processedIndices.has(idx));
+                if (availableIndices.length >= minClusterSize) {
+                    const cleanName = word.charAt(0).toUpperCase() + word.slice(1);
+                    const newBucket: BucketNode = {
+                        id: uuidv4(),
+                        name: `⭐ ${cleanName} (Auto-Discovered)`,
+                        rowCount: availableIndices.length,
+                        childrenCount: 0,
+                        children: [],
+                        rowIndices: availableIndices,
+                        depth: 0
+                    };
+                    rootBuckets.push(newBucket);
+                    availableIndices.forEach(idx => processedIndices.add(idx));
+                    autoDiscoveredCount++;
+                }
+            }
+
+            // Remove processed rows from General
+            if (processedIndices.size > 0) {
+                generalBucket.rowIndices = generalBucket.rowIndices.filter(idx => !processedIndices.has(idx));
+                generalBucket.rowCount = generalBucket.rowIndices.length;
+                console.log(`>>> Job [${jobId}] Auto-Discovery found ${autoDiscoveredCount} new clusters and rescued ${processedIndices.size} rows from General.`);
+            }
+        }
+
+        // 6. Finalize and Save JSON Result
         const analysisId = uuidv4();
         const finalResult = {
             workbookId,

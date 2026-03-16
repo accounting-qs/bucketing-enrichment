@@ -53,14 +53,14 @@ export default function Home() {
     }
   };
 
-  const handleAnalyze = async (selectedColumn: string, provider: string, guide?: any[] | null) => {
+  const handleAnalyze = async (selectedColumn: string, provider: string, minClusterSize: number = 50, guide?: any[] | null) => {
     if (!workbook) return;
     setIsAnalyzing(true);
     try {
       const res = await fetch(`/api/workbooks/${workbook.id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selectedColumn, provider, guide }),
+        body: JSON.stringify({ selectedColumn, provider, guide, minClusterSize }),
       });
       const data = await res.json();
 
@@ -72,14 +72,16 @@ export default function Home() {
           selectedColumn,
           uniqueValues: data.originalAnalysis.uniqueValues,
           workbookId: workbook.id,
-          provider: data.originalAnalysis.provider
+          provider: data.originalAnalysis.provider,
+          minClusterSize
         });
       } else if (data.needsConfirmation) {
         setPendingSuggestions(data.suggestedBuckets);
         setAnalysisContext({
           selectedColumn,
           mappedBuckets: data.mappedBuckets,
-          workbookId: workbook.id
+          workbookId: workbook.id,
+          minClusterSize
         });
       } else {
         setAnalysisId(data.analysisId);
@@ -105,7 +107,8 @@ export default function Home() {
           selectedColumn: analysisContext.selectedColumn,
           confirmedBuckets,
           uniqueValues: analysisContext.uniqueValues,
-          provider: analysisContext.provider
+          provider: analysisContext.provider,
+          minClusterSize: analysisContext.minClusterSize
         }),
       });
       const data = await res.json();

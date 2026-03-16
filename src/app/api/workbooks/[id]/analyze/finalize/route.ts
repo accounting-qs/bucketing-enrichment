@@ -12,7 +12,8 @@ export async function POST(
         selectedColumn,
         confirmedBuckets,
         uniqueValues,
-        provider
+        provider,
+        minClusterSize
     } = await req.json();
 
     try {
@@ -36,7 +37,8 @@ export async function POST(
                 selectedColumn,
                 confirmedBuckets,
                 uniqueValues,
-                provider
+                provider,
+                minClusterSize
             }
         });
 

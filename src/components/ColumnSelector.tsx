@@ -17,12 +17,13 @@ export default function ColumnSelector({
     onReset
 }: {
     workbook: Workbook;
-    onAnalyze: (column: string, provider: string) => void;
+    onAnalyze: (column: string, provider: string, minClusterSize: number) => void;
     onReset: () => void;
 }) {
     const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
     const [samples, setSamples] = useState<Array<{ value: string; count: number }>>([]);
     const [isLoadingSamples, setIsLoadingSamples] = useState(false);
+    const [minClusterSize, setMinClusterSize] = useState<number>(50);
 
     const fetchSamples = async (col: string) => {
         setSelectedColumn(col);
@@ -138,12 +139,31 @@ export default function ColumnSelector({
                         </select>
                     </div>
 
+                    <div className="flex-1 space-y-2">
+                        <div className="flex justify-between items-center ml-1">
+                            <label className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                                Auto-Discovery Threshold <Info className="w-3 h-3 text-slate-400" />
+                            </label>
+                            <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md">{minClusterSize}</span>
+                        </div>
+                        <input 
+                            type="range" 
+                            min="10" 
+                            max="500" 
+                            step="10" 
+                            value={minClusterSize} 
+                            onChange={(e) => setMinClusterSize(parseInt(e.target.value))} 
+                            className="w-full accent-primary mt-2" 
+                        />
+                        <p className="text-[10px] text-slate-400 font-medium ml-1">Min. unmatched rows required to auto-create a new missing category.</p>
+                    </div>
+
                     <div className="flex items-end flex-1 lg:flex-[0.4]">
                         <button
                             disabled={!selectedColumn}
                             onClick={() => {
                                 const prov = (document.getElementById("provider-select") as HTMLSelectElement).value;
-                                onAnalyze(selectedColumn!, prov);
+                                onAnalyze(selectedColumn!, prov, minClusterSize);
                             }}
                             className="w-full h-full min-h-[56px] bg-primary hover:bg-emerald-600 disabled:opacity-50 disabled:grayscale text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-primary/20 transition-all active:scale-[0.98]"
                         >
