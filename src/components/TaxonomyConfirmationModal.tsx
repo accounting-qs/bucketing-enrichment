@@ -322,43 +322,7 @@ export default function TaxonomyConfirmationModal({
                     </header>
 
                     <div className="flex-1 overflow-y-auto p-10 space-y-8">
-                        {/* Import / Guide Input */}
-                        <div className="bg-slate-50 dark:bg-zinc-900 rounded-xl p-4 border border-dashed border-slate-300 dark:border-slate-700">
-                            <div className="flex items-center gap-3 mb-3">
-                                <FileJson className="w-5 h-5 text-slate-500" />
-                                <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300">Import Taxonomy Guide</h4>
-                            </div>
-                            <textarea
-                                placeholder='Paste your JSON guide here... e.g. [{ "name": "Real Estate", "children": [...] }]'
-                                className="w-full text-xs font-mono bg-white dark:bg-black border border-slate-200 dark:border-slate-800 rounded-lg p-3 min-h-[80px] outline-none focus:ring-2 ring-primary/20 transition-all"
-                                onChange={(e) => {
-                                    try {
-                                        const val = e.target.value.trim();
-                                        if (!val) return;
-                                        const parsed = JSON.parse(val);
-                                        if (Array.isArray(parsed)) {
-                                            // Helper to normalize JSON to TaxonomyNode
-                                            const normalize = (items: any[]): TaxonomyNode[] => {
-                                                return items.map(item => ({
-                                                    name: item.name || item.bucket_name || "Unknown",
-                                                    children: item.children ? normalize(item.children) : [],
-                                                    isAiSuggested: false
-                                                }));
-                                            };
-                                            const normalized = normalize(parsed);
-                                            setTree(normalized);
-                                        }
-                                    } catch (err) {
-                                        // Silent fail or simple validation UI
-                                    }
-                                }}
-                            />
-                            <p className="text-[10px] text-zinc-500 mt-2">
-                                Paste a valid JSON array to instantly populate the structure above.
-                                Supports nested <code>children</code> and keys <code>name</code> or <code>bucket_name</code>.
-                            </p>
-                        </div>
-
+                        {/* Tree Editor */}
                         <SortableContext
                             items={tree.map((node, i) => node.name + [i].join("-"))}
                             strategy={verticalListSortingStrategy}
@@ -376,7 +340,7 @@ export default function TaxonomyConfirmationModal({
                                 ))}
                             </div>
                         </SortableContext>
-
+                        
                         {/* Add Root Bucket Input */}
                         <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-zinc-900 rounded-xl border border-dashed border-slate-300 dark:border-slate-700">
                             <Plus className="w-5 h-5 text-slate-400" />
@@ -393,6 +357,41 @@ export default function TaxonomyConfirmationModal({
                             >
                                 Add
                             </button>
+                        </div>
+
+                        <div className="h-4 border-b border-slate-100 dark:border-slate-800/50" />
+
+                        {/* Import / Guide Input (Advanced) */}
+                        <div className="bg-slate-50 dark:bg-zinc-900 rounded-xl p-4 border border-dashed border-slate-300 dark:border-slate-700 opacity-60 hover:opacity-100 transition-opacity">
+                            <div className="flex items-center gap-3 mb-3">
+                                <FileJson className="w-5 h-5 text-slate-500" />
+                                <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300">Advanced: Import Context JSON</h4>
+                            </div>
+                            <textarea
+                                placeholder='Paste your JSON guide here... e.g. [{ "name": "Real Estate", "children": [...] }]'
+                                className="w-full text-xs font-mono bg-white dark:bg-black border border-slate-200 dark:border-slate-800 rounded-lg p-3 min-h-[60px] outline-none focus:ring-2 ring-primary/20 transition-all"
+                                onChange={(e) => {
+                                    try {
+                                        const val = e.target.value.trim();
+                                        if (!val) return;
+                                        const parsed = JSON.parse(val);
+                                        if (Array.isArray(parsed)) {
+                                            const normalize = (items: any[]): TaxonomyNode[] => {
+                                                return items.map(item => ({
+                                                    name: item.name || item.bucket_name || "Unknown",
+                                                    children: item.children ? normalize(item.children) : [],
+                                                    isAiSuggested: false
+                                                }));
+                                            };
+                                            const normalized = normalize(parsed);
+                                            setTree(normalized);
+                                        }
+                                    } catch (err) { }
+                                }}
+                            />
+                            <p className="text-[10px] text-zinc-500 mt-2">
+                                Paste a JSON array to overwrite the structure above. Keys <code>name</code> and <code>children</code>.
+                            </p>
                         </div>
                     </div>
 

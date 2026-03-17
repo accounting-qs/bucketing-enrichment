@@ -118,7 +118,7 @@ function findPathToNode(nodes: BucketNode[], targetId: string, currentPath: Buck
 
 const worker = new Worker('workbook-analysis', async (job: Job) => {
     const { jobId, workbookId, options } = job.data;
-    const { selectedColumn, confirmedBuckets, uniqueValues, provider, minClusterSize = 50 } = options;
+    const { selectedColumn, confirmedBuckets, provider, minClusterSize = 50 } = options;
 
     try {
         console.log(`>>> Starting Job [${jobId}] for Workbook [${workbookId}]`);
@@ -147,11 +147,22 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
         const valueMap: Record<string, BucketNode> = {};
         
+        // RECACULATE UNIQUE VALUES USING DUCKDB (Avoiding memory explosion over Redis)
+        const safePath = workbook.storagePath.replace(/'/g, "''");
+        const initDuckDB = await Database.create(':memory:');
+        const countQuery = `
+            SELECT "${selectedColumn}" as val, count(*) as count
+            FROM read_csv('${safePath}', header=True, auto_detect=True)
+            WHERE "${selectedColumn}" IS NOT NULL AND "${selectedColumn}" != ''
+            GROUP BY "${selectedColumn}"
+            ORDER BY count DESC
+        `;
+        const frequencyRows = await initDuckDB.all(countQuery);
+        await initDuckDB.close();
+
         // OPTIMIZATION: Sort unique values by frequency, and only send the top N to AI.
         // This is crucial for large datasets (60k+ unique values) to avoid API fatigue and timeouts.
-        const sortedUniqueStrings = Object.entries(uniqueValues)
-            .sort((a, b) => (b[1] as number) - (a[1] as number))
-            .map(entry => entry[0]);
+        const sortedUniqueStrings = frequencyRows.map(row => row.val?.toString().trim()).filter(Boolean);
 
         const MAX_AI_VALUES = 2500;
         const aiTargetStrings = sortedUniqueStrings.slice(0, MAX_AI_VALUES);
@@ -245,7 +256,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         let totalRowsProcessed = 0;
 
         const duckDB = await Database.create(':memory:');
-        const safePath = workbook.storagePath.replace(/'/g, "''");
+        
         // We use row_number()-1 to get 0-based CSV rows for consistent row-indexing
         const duckQuery = `
             SELECT "${selectedColumn}" as val, list(row_idx) as indices, count(*) as row_count

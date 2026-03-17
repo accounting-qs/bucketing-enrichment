@@ -140,22 +140,20 @@ export default function ColumnSelector({
                     </div>
 
                     <div className="flex-1 space-y-2">
-                        <div className="flex justify-between items-center ml-1">
+                        <div className="flex items-center gap-2 ml-1">
                             <label className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                                Auto-Discovery Threshold <Info className="w-3 h-3 text-slate-400" />
+                                Auto-Discovery Threshold <Info className="w-4 h-4 text-slate-400" />
                             </label>
-                            <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md">{minClusterSize}</span>
                         </div>
                         <input 
-                            type="range" 
-                            min="10" 
-                            max="500" 
-                            step="10" 
+                            type="number" 
+                            min="1" 
+                            max="100000" 
                             value={minClusterSize} 
-                            onChange={(e) => setMinClusterSize(parseInt(e.target.value))} 
-                            className="w-full accent-primary mt-2" 
+                            onChange={(e) => setMinClusterSize(parseInt(e.target.value) || 0)} 
+                            className="w-full bg-slate-100 dark:bg-zinc-900 border-2 border-transparent focus:border-primary rounded-xl px-5 py-3 text-sm font-bold outline-none transition-all" 
                         />
-                        <p className="text-[10px] text-slate-400 font-medium ml-1">Min. unmatched rows required to auto-create a new missing category.</p>
+                        <p className="text-[11px] text-slate-400 font-medium ml-1">Min. unmatched rows required to auto-create a new missing category.</p>
                     </div>
 
                     <div className="flex items-end flex-1 lg:flex-[0.4]">

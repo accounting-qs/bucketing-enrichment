@@ -36,7 +36,6 @@ export async function POST(
             options: {
                 selectedColumn,
                 confirmedBuckets,
-                uniqueValues,
                 provider,
                 minClusterSize
             }
