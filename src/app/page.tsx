@@ -279,62 +279,9 @@ export default function Home() {
         />
       )}
 
-      {/* Sidebar */}
-      <aside className="w-64 hidden lg:flex flex-col bg-white dark:bg-zinc-950 border-r border-slate-200 dark:border-slate-800 fixed h-full z-30">
-        <div className="p-6 flex-1 overflow-y-auto">
-          <div className="flex items-center gap-2 mb-8">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-              <Database className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-display font-bold text-xl tracking-tight">Quantum Enricher</span>
-          </div>
-
-          <nav className="space-y-1">
-            <button
-              onClick={handleReset}
-              className={`flex w-full items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all ${!workbook ? 'bg-primary/10 text-primary border-r-4 border-primary' : 'text-slate-500 hover:text-primary hover:bg-slate-50 dark:hover:bg-zinc-900'}`}
-            >
-              <LayoutDashboard className="w-5 h-5" />
-              Dashboard
-            </button>
-            <button className="flex w-full items-center gap-3 px-4 py-3 rounded-xl font-medium text-slate-500 hover:text-primary hover:bg-slate-50 dark:hover:bg-zinc-900 transition-all">
-              <Database className="w-5 h-5" />
-              Brands
-            </button>
-            <button className="flex w-full items-center gap-3 px-4 py-3 rounded-xl font-medium text-slate-500 hover:text-primary hover:bg-slate-50 dark:hover:bg-zinc-900 transition-all">
-              <Users className="w-5 h-5" />
-              Users
-            </button>
-            <button className="flex w-full items-center gap-3 px-4 py-3 rounded-xl font-medium text-slate-500 hover:text-primary hover:bg-slate-50 dark:hover:bg-zinc-900 transition-all">
-              <BarChart className="w-5 h-5" />
-              Analytics
-            </button>
-            <button className="flex w-full items-center gap-3 px-4 py-3 rounded-xl font-medium text-slate-500 hover:text-primary hover:bg-slate-50 dark:hover:bg-zinc-900 transition-all">
-              <SettingsIcon className="w-5 h-5" />
-              Settings
-            </button>
-          </nav>
-        </div>
-
-        <div className="p-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-zinc-950 sticky bottom-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0">
-              <div className="w-full h-full bg-primary/20 flex items-center justify-center text-primary font-bold">QA</div>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold truncate">QS Admin</p>
-              <p className="text-xs text-slate-500 truncate">Manager Account</p>
-            </div>
-            <button className="text-slate-400 hover:text-slate-600 shrink-0">
-              <LogOut className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </aside>
-
       {/* Main Content Area */}
-      <div className="flex-1 lg:ml-64 flex flex-col min-h-screen">
-        <header className="h-16 bg-white dark:bg-zinc-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-8 sticky top-0 z-40">
+      <div className="flex-1 flex flex-col min-h-screen min-w-0">
+        <header className="h-16 bg-white dark:bg-zinc-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-8 sticky top-0 z-40 shrink-0">
           <div className="flex items-center gap-6">
             <div className="relative">
               <select className="appearance-none bg-slate-100 dark:bg-zinc-900 border-none rounded-lg px-4 py-2 pr-10 text-sm font-semibold cursor-pointer outline-none">
@@ -355,7 +302,7 @@ export default function Home() {
           </div>
         </header>
 
-        <main className="p-8 flex-1">
+        <main className="p-8 flex-1 flex flex-col min-w-0 min-h-0">
           {!workbook ? (
             <div className="animate-reveal space-y-8">
               <div>
@@ -447,27 +394,29 @@ export default function Home() {
               )}
             </div>
           ) : (
-            <div className="animate-reveal space-y-6 flex flex-col h-[calc(100vh-12rem)]">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-display font-bold flex items-center gap-3">
-                    <button onClick={handleReset} className="text-slate-400 hover:text-primary transition-colors">
+            <div className="animate-reveal space-y-6 flex flex-col h-[calc(100vh-12rem)] min-w-0">
+              <div className="flex items-center justify-between shrink-0">
+                <div className="min-w-0">
+                  <h2 className="text-2xl font-display font-bold flex items-center gap-3 truncate">
+                    <button onClick={handleReset} className="text-slate-400 hover:text-primary transition-colors shrink-0">
                       <ChevronRight className="w-6 h-6 rotate-180" />
                     </button>
-                    {workbook.filename}
+                    <span className="truncate">{workbook.filename}</span>
                   </h2>
-                  <p className="text-sm text-slate-500 mt-1">
+                  <p className="text-sm text-slate-500 mt-1 truncate">
                     Analysing <span className="text-primary font-bold">"{analysis.selectedColumn}"</span> • {analysis.stats.uniqueValues} unique values
                   </p>
                 </div>
-                <button className="bg-primary hover:bg-emerald-600 text-white font-bold py-2.5 px-6 rounded-xl shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+                <button 
+                  onClick={() => handleReset()}
+                  className="bg-primary hover:bg-emerald-600 text-white font-bold py-2.5 px-6 rounded-xl shadow-lg shadow-primary/20 transition-all flex items-center gap-2 shrink-0">
                   <Plus className="w-5 h-5" />
                   New Analysis
                 </button>
               </div>
 
-              <div className="flex-1 flex overflow-hidden bg-white dark:bg-zinc-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm min-h-0">
-                <div className="w-80 flex-shrink-0 border-r border-slate-200 dark:border-slate-800 overflow-y-auto">
+              <div className="flex-1 flex overflow-hidden bg-white dark:bg-zinc-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm min-h-0 min-w-0">
+                <div className="w-80 flex-shrink-0 border-r border-slate-200 dark:border-slate-800 overflow-y-auto min-h-0">
                   <FinderTree
                     nodes={analysis.rootBuckets}
                     onSelect={setSelectedBucket}
@@ -476,7 +425,7 @@ export default function Home() {
                     onCheckToggle={handleCheckToggle}
                   />
                 </div>
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 overflow-hidden min-w-0 flex flex-col">
                   <DataPreview
                     bucket={selectedBucket}
                     workbookId={workbook.id}

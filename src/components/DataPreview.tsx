@@ -77,19 +77,19 @@ export default function DataPreview({
     }
 
     return (
-        <div className="h-full flex flex-col animate-reveal bg-white dark:bg-zinc-950">
+        <div className="h-full flex flex-col animate-reveal bg-white dark:bg-zinc-950 min-w-0 min-h-0">
             {/* Table Header */}
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 z-10 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md">
-                <div>
-                    <h2 className="text-xl font-display font-bold flex items-center gap-2">
-                        <span className="w-2 h-6 bg-primary rounded-full" />
-                        {bucket.name}
+            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 z-10 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md shrink-0 gap-4">
+                <div className="min-w-0">
+                    <h2 className="text-xl font-display font-bold flex items-center gap-2 truncate">
+                        <span className="w-2 h-6 bg-primary rounded-full shrink-0" />
+                        <span className="truncate">{bucket.name}</span>
                     </h2>
-                    <p className="text-xs text-slate-500 font-medium mt-1">
+                    <p className="text-xs text-slate-500 font-medium mt-1 truncate">
                         Displaying top {Math.min(50, bucket.rowCount)} of {bucket.rowCount.toLocaleString()} records
                     </p>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 shrink-0">
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                         <input
@@ -102,7 +102,7 @@ export default function DataPreview({
                     </div>
                     <button
                         onClick={handleExport}
-                        className="flex items-center gap-2 px-6 py-2 bg-primary hover:bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-sm transition-all"
+                        className="flex items-center gap-2 px-6 py-2 bg-primary hover:bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-sm transition-all shrink-0"
                     >
                         <Download className="w-4 h-4" />
                         Export
@@ -111,7 +111,7 @@ export default function DataPreview({
             </div>
 
             {/* Table Content */}
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 overflow-auto min-h-0 min-w-0 relative">
                 {isLoading ? (
                     <div className="h-full flex items-center justify-center p-12">
                         <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -126,7 +126,7 @@ export default function DataPreview({
                         <thead className="sticky top-0 z-20">
                             <tr>
                                 {columns.map(col => (
-                                    <th key={col} className="px-6 py-4 font-bold text-slate-400 uppercase tracking-widest text-[10px] bg-slate-50 dark:bg-zinc-900 border-b border-slate-100 dark:border-slate-800">
+                                    <th key={col} className="px-6 py-4 font-bold text-slate-400 uppercase tracking-widest text-[10px] bg-slate-50 dark:bg-zinc-900 border-b border-slate-100 dark:border-slate-800 whitespace-nowrap">
                                         {col}
                                     </th>
                                 ))}
