@@ -23,10 +23,10 @@ export async function proposeTaxonomy(
     ${JSON.stringify(sampleValues.slice(0, 500))}
 
     TAXONOMY RULES:
-    1. ${guide ? "CRITICAL: Use the provided GUIDE as your Strict Foundation. You can Add new buckets if necessary, but do NOT remove guide buckets." : "Create a logical hierarchy from scratch."}
+    1. ${guide ? "CRITICAL STRICT RULE: You MUST ONLY use the exact taxonomy buckets provided in the GUIDE. DO NOT, under any circumstances, create, hallucinate, or suggest any new categories, sub-categories, or parent buckets." : "Create a logical hierarchy from scratch."}
     2. Focus on BROAD categories (e.g., "Finance") breaking down into specific niches (e.g., "Investment Banking").
     3. Propose a nested JSON structure.
-    4. Mark any new buckets you discover (that were not in the guide) as "isAiSuggested": true.
+    4. If using a guide, your output must exactly match the provided guide structure. Do not mark anything as aiSuggested.
 
     ${guide ? `USER GUIDE (JSON Schema): ${JSON.stringify(guide)}` : ""}
 
@@ -116,7 +116,7 @@ export async function mapBatchToTaxonomy(
     2. BE AGGRESSIVE: Do NOT use "General / Unformatted" unless the value is completely unreadable or nonsensical.
     3. BEST FIT: Even if a value doesn't match 100%, assign it to the Parent/Category that makes the most sense.
     4. SPECIFICITY: Assign to the deepest possible level (Leaf) of the taxonomy provided.
-    5. NEW BUCKETS: If a value fits a Parent but none of its existing Children, definitely suggest a new Child name within that Parent.
+    5. STRICT RULES: DO NOT create, hallucinate, or invent ANY new buckets, child names, or paths. You MUST ONLY use paths that exist exactly in the TAXONOMY STRUCTURE. If a value absolutely does not fit anywhere, map it to the path ["General / Unformatted"].
     6. Return the full PATH as an array of strings (e.g., ["Real Estate", "Residential"]).
 
     OUTPUT FORMAT (JSON):

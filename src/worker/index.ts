@@ -180,28 +180,24 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                         let node: BucketNode | undefined = siblings.find((b: BucketNode) => b.name.toLowerCase().trim() === segment.toLowerCase().trim());
 
                         if (!node) {
-                            node = {
-                                id: uuidv4(),
-                                name: segment,
-                                rowCount: 0,
-                                childrenCount: 0,
-                                children: [],
-                                rowIndices: [],
-                                depth: currParent ? currParent.depth + 1 : 0
-                            };
-                            siblings.push(node);
-                            if (currParent) currParent.childrenCount++;
+                            // STRICT CONSTRAINT: Do not allow AI to hallucinate directories. Break and flag undefined.
+                            lastNode = undefined;
+                            break;
                         }
                         currParent = node;
                         lastNode = node;
                     }
 
-                    if (m.value && lastNode) {
+                    if (m.value) {
                         const originalKey = batch.find(k => k.toLowerCase().trim() === m.value.toLowerCase().trim()) || m.value;
-                        valueMap[originalKey.toLowerCase().trim()] = lastNode;
-                        
-                        const fullPath = findPathToNode(rootBuckets, lastNode.id);
-                        if (fullPath) nodeToPath.set(lastNode.id, fullPath);
+                        if (lastNode) {
+                            valueMap[originalKey.toLowerCase().trim()] = lastNode;
+                            const fullPath = findPathToNode(rootBuckets, lastNode.id);
+                            if (fullPath) nodeToPath.set(lastNode.id, fullPath);
+                        } else {
+                            // Fallback to General Bucket if AI hallucinated paths or couldn't classify it properly
+                            valueMap[originalKey.toLowerCase().trim()] = generalBucket;
+                        }
                     }
                 });
             }
@@ -270,60 +266,8 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         // Update progress since DuckDB is super fast, it happens all at once
         await db.query(`UPDATE jobs SET progress = 85, updatedAt = ? WHERE id = ?`, [new Date().toISOString(), jobId]).catch(() => { });
 
-        // 5. Semantic Auto-Discovery Phase (Breaking The General Bucket)
-        if (unmappedRows.length > 0) {
-            await db.query(`UPDATE jobs SET message = ?, progress = 90, updatedAt = ? WHERE id = ?`,
-                ['Auto-discovering missing data clusters...', new Date().toISOString(), jobId]);
-            
-            const wordCounts: Record<string, number[]> = Object.create(null);
-            const stopWords = new Set(['and', 'the', 'for', 'inc', 'llc', 'ltd', 'corp', 'company', 'group', 'services', 'solutions', 'management', 'international', 'associates', 'technologies', 'technology', 'system', 'systems', 'llp', 'pllc']);
-            
-            // Extract keywords
-            for (const row of unmappedRows) {
-                const tokens = row.value.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length > 2);
-                const uniqueTokens = Array.from(new Set(tokens.filter(t => !stopWords.has(t))));
-                
-                uniqueTokens.forEach(t => {
-                    if (!Array.isArray(wordCounts[t])) wordCounts[t] = [];
-                    wordCounts[t].push(row.index);
-                });
-            }
-
-            // Find clusters surpassing the user-defined threshold (minClusterSize)
-            const autoClusters = Object.entries(wordCounts)
-                .filter(([_, indices]) => indices.length >= minClusterSize)
-                .sort((a, b) => b[1].length - a[1].length);
-
-            const processedIndices = new Set<number>();
-            let autoDiscoveredCount = 0;
-            
-            for (const [word, indices] of autoClusters) {
-                // Keep only indices that haven't been claimed by a bigger auto-cluster
-                const availableIndices = indices.filter(idx => !processedIndices.has(idx));
-                if (availableIndices.length >= minClusterSize) {
-                    const cleanName = word.charAt(0).toUpperCase() + word.slice(1);
-                    const newBucket: BucketNode = {
-                        id: uuidv4(),
-                        name: `⭐ ${cleanName} (Auto-Discovered)`,
-                        rowCount: availableIndices.length,
-                        childrenCount: 0,
-                        children: [],
-                        rowIndices: availableIndices,
-                        depth: 0
-                    };
-                    rootBuckets.push(newBucket);
-                    availableIndices.forEach(idx => processedIndices.add(idx));
-                    autoDiscoveredCount++;
-                }
-            }
-
-            // Remove processed rows from General
-            if (processedIndices.size > 0) {
-                generalBucket.rowIndices = generalBucket.rowIndices.filter(idx => !processedIndices.has(idx));
-                generalBucket.rowCount = generalBucket.rowIndices.length;
-                console.log(`>>> Job [${jobId}] Auto-Discovery found ${autoDiscoveredCount} new clusters and rescued ${processedIndices.size} rows from General.`);
-            }
-        }
+        // 5. Semantic Auto-Discovery Phase (Breaking The General Bucket) DELETED
+        // Per strictly conforming mapping instructions, we will not create Auto-Discovered clusters and rely entirely on the exact taxonomy.
 
         // 6. Finalize and Save JSON Result
         const analysisId = uuidv4();
