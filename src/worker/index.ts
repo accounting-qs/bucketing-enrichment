@@ -41,67 +41,7 @@ function buildBucketTree(nodes: TaxonomyNode[], depth: number = 0): BucketNode[]
     }));
 }
 
-function findDeepMatch(nodes: BucketNode[], searchValue: string): BucketNode | undefined {
-    const lowerSearch = searchValue.toLowerCase().trim();
-    if (!lowerSearch) return undefined;
 
-    for (const node of nodes) {
-        if (node.name === "General / Unformatted") continue;
-        const lowerNode = node.name.toLowerCase().trim();
-        
-        // Exact match or contains
-        if (lowerSearch === lowerNode || lowerSearch.includes(lowerNode) || lowerNode.includes(lowerSearch)) {
-            return node;
-        }
-        
-        if (node.children && node.children.length > 0) {
-            const childMatch = findDeepMatch(node.children, searchValue);
-            if (childMatch) return childMatch;
-        }
-    }
-    return undefined;
-}
-
-// Advanced long-tail fuzzy matcher
-function findFuzzyMatch(nodes: BucketNode[], searchValue: string): BucketNode | undefined {
-    const exact = findDeepMatch(nodes, searchValue);
-    if (exact) return exact;
-
-    const lowerSearchTokens = searchValue.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
-    if (lowerSearchTokens.length === 0) return undefined;
-
-    let bestMatch: BucketNode | undefined;
-    let maxMatchScore = 0;
-
-    function searchFuzzy(nodeList: BucketNode[]) {
-        for (const node of nodeList) {
-            if (node.name === "General / Unformatted") continue;
-            
-            const nodeTokens = node.name.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
-            let matchScore = 0;
-            nodeTokens.forEach(nt => {
-                if (lowerSearchTokens.some(st => st === nt || st.includes(nt) || nt.includes(st))) {
-                    matchScore++;
-                }
-            });
-
-            // If we match at least 50% of the significant words of the bucket name
-            if (matchScore > 0 && matchScore >= Math.ceil(nodeTokens.length / 2)) {
-                if (matchScore > maxMatchScore) {
-                    maxMatchScore = matchScore;
-                    bestMatch = node;
-                }
-            }
-
-            if (node.children && node.children.length > 0) {
-                searchFuzzy(node.children);
-            }
-        }
-    }
-    
-    searchFuzzy(nodes);
-    return bestMatch;
-}
 
 function findPathToNode(nodes: BucketNode[], targetId: string, currentPath: BucketNode[] = []): BucketNode[] | null {
     for (const node of nodes) {
@@ -164,27 +104,49 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         // This is crucial for large datasets (60k+ unique values) to avoid API fatigue and timeouts.
         const sortedUniqueStrings = frequencyRows.map(row => row.val?.toString().trim()).filter(Boolean);
 
-        const MAX_AI_VALUES = 2500;
-        const aiTargetStrings = sortedUniqueStrings.slice(0, MAX_AI_VALUES);
+        // --- NEW HYBRID WORKFLOW (OPTION C) ---
+
+        // 1. Build an exact match lookup dictionary from the user's approved taxonomy
+        const exactMatchLookup = new Map<string, BucketNode>();
+        function fillExactMatches(nodes: BucketNode[]) {
+            for (const node of nodes) {
+                if (node.name !== "General / Unformatted") {
+                    exactMatchLookup.set(node.name.toLowerCase().trim(), node);
+                }
+                if (node.children) fillExactMatches(node.children);
+            }
+        }
+        fillExactMatches(rootBuckets);
+
+        // 2. Separate strictly Exact Matches from Unknowns
+        const aiTargetStrings: string[] = [];
+        for (const str of sortedUniqueStrings) {
+            const key = str.toLowerCase();
+            if (exactMatchLookup.has(key)) {
+                // Instantly map exact matches for free and speed!
+                valueMap[key] = exactMatchLookup.get(key)!;
+            } else {
+                aiTargetStrings.push(str);
+            }
+        }
+
+        // We only send the top Unknowns to AI (Cost savings & limits)
+        const cappedAiTargets = aiTargetStrings.slice(0, 5000);
         
-        const BATCH_SIZE = 50;
+        const BATCH_SIZE = 150; // Increased batch size since models can handle 150 easy
         const nodeToPath: Map<string, BucketNode[]> = new Map();
 
-        // Create a lookup for confirmed root buckets for faster access
-        const rootLookup = new Map<string, BucketNode>();
-        rootBuckets.forEach(b => rootLookup.set(b.name.toLowerCase(), b));
-
-        // 3. AI Mapping Phase (Limited to Top Frequencies)
+        // 3. AI Mapping Phase (Only applied as a Fallback Rescue for Unknowns)
         await db.query(`UPDATE jobs SET message = ?, progress = 10, updatedAt = ? WHERE id = ?`,
-            [`AI Mapping top ${aiTargetStrings.length} unique values...`, new Date().toISOString(), jobId]);
+            [`AI processing ${cappedAiTargets.length} unmapped values...`, new Date().toISOString(), jobId]);
 
         let totalMappingsReceived = 0;
-        for (let i = 0; i < aiTargetStrings.length; i += BATCH_SIZE) {
-            const batch = aiTargetStrings.slice(i, i + BATCH_SIZE);
-            const batchProgress = 10 + Math.floor((i / aiTargetStrings.length) * 40); 
+        for (let i = 0; i < cappedAiTargets.length; i += BATCH_SIZE) {
+            const batch = cappedAiTargets.slice(i, i + BATCH_SIZE);
+            const batchProgress = 10 + Math.floor((i / cappedAiTargets.length) * 40); 
 
             await db.query(`UPDATE jobs SET progress = ?, updatedAt = ? WHERE id = ?`, [batchProgress, new Date().toISOString(), jobId]);
-            console.log(`>>> Job [${jobId}] Mapping Batch ${i / BATCH_SIZE + 1}/${Math.ceil(aiTargetStrings.length / BATCH_SIZE)}...`);
+            console.log(`>>> Job [${jobId}] AI Mapping Batch ${i / BATCH_SIZE + 1}/${Math.ceil(cappedAiTargets.length / BATCH_SIZE)}...`);
 
             let result: any = null;
             let retries = 3;
@@ -206,8 +168,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 totalMappingsReceived += result.mappings.length;
                 result.mappings.forEach((m: any) => {
                     if (!m.path || m.path.length === 0) return;
-
-                    // Support both string paths and array paths from AI
+                    
                     const pathArray = Array.isArray(m.path) ? m.path : m.path.split('>').map((s: string) => s.trim());
                     
                     let currParent: BucketNode | undefined = undefined;
@@ -236,7 +197,6 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                     }
 
                     if (m.value && lastNode) {
-                        // Use case-insensitive mapping to be robust
                         const originalKey = batch.find(k => k.toLowerCase().trim() === m.value.toLowerCase().trim()) || m.value;
                         valueMap[originalKey.toLowerCase().trim()] = lastNode;
                         
@@ -246,11 +206,11 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 });
             }
         }
-        console.log(`>>> Job [${jobId}] AI Mapping done. Total mappings processed: ${totalMappingsReceived}`);
+        console.log(`>>> Job [${jobId}] AI Rescue done. Total mappings processed: ${totalMappingsReceived}`);
 
         // 4. Grouping & Assigning Phase using DuckDB
         await db.query(`UPDATE jobs SET message = ?, progress = 55, updatedAt = ? WHERE id = ?`,
-            ['Reading large CSV file... (DuckDB)', new Date().toISOString(), jobId]);
+            ['Assigning matched records directly to CSV... (DuckDB)', new Date().toISOString(), jobId]);
 
         const unmappedRows: { index: number, value: string }[] = [];
         let totalRowsProcessed = 0;
@@ -282,10 +242,6 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             } else {
                 const lookupKey = val.toLowerCase();
                 let target: BucketNode | undefined = valueMap[lookupKey];
-
-                if (!target) {
-                    target = findFuzzyMatch(rootBuckets, val);
-                }
 
                 if (target) {
                     const path = nodeToPath.get(target.id) || findPathToNode(rootBuckets, target.id);
