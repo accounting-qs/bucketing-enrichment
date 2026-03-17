@@ -494,8 +494,8 @@ export default function Home() {
               {checkedBucketIds.size}
             </span>
             <div className="flex flex-col">
-              <span className="text-sm font-bold">Carpetas Seleccionadas</span>
-              <span className="text-[11px] text-slate-400 font-medium">{getSelectedRowCount().toLocaleString()} contactos totales</span>
+              <span className="text-sm font-bold">Selected Clusters</span>
+              <span className="text-[11px] text-slate-400 font-medium">{getSelectedRowCount().toLocaleString()} total records</span>
             </div>
           </div>
           
@@ -504,7 +504,7 @@ export default function Home() {
               onClick={() => setCheckedBucketIds(new Set())}
               className="text-xs font-semibold text-slate-400 hover:text-white transition-colors"
             >
-              Limpiar
+              Clear
             </button>
             <button 
               className={`bg-primary hover:bg-emerald-600 text-white font-bold py-2 px-5 rounded-full text-sm shadow-lg shadow-primary/20 transition-all flex items-center gap-2 ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -516,7 +516,7 @@ export default function Home() {
               ) : (
                 <DownloadCloud className="w-4 h-4" />
               )}
-              {isExporting ? 'Exportando...' : 'Exportar CSV'}
+              {isExporting ? 'Exporting...' : 'Export CSV'}
             </button>
           </div>
         </div>
