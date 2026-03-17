@@ -1,58 +1,29 @@
 "use client";
 
 import { BucketNode } from "@/types";
-import { Search, Download, Table, FileSpreadsheet, XCircle, FileText, Copy, Check, ExternalLink } from "lucide-react";
+import { Search, Download, Table, FileSpreadsheet, XCircle, FileText } from "lucide-react";
 import { useState, useMemo } from "react";
 
 function DataCell({ value }: { value: any }) {
     const val = String(value);
     const isUrl = /^https?:\/\//i.test(val) || /^www\./i.test(val);
     const href = /^www\./i.test(val) ? `http://${val}` : val;
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        navigator.clipboard.writeText(val);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    };
 
     return (
         <td className="px-6 py-4 text-slate-700 dark:text-slate-300 font-medium truncate max-w-[250px] group-hover/row:text-primary relative group/cell">
             {isUrl ? (
-                <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:text-emerald-600 hover:underline">
+                <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:text-emerald-600 hover:underline relative z-10">
                     {val}
                 </a>
             ) : (
                 val
             )}
             
-            {/* Tooltip on hover */}
-            <div className="absolute left-6 top-[calc(100%-10px)] opacity-0 invisible group-hover/cell:opacity-100 group-hover/cell:visible transition-all z-[60] flex items-stretch shadow-2xl scale-95 group-hover/cell:scale-100 origin-top-left">
-                <div className="bg-slate-900 text-slate-100 text-sm px-4 py-2.5 rounded-l-xl whitespace-normal break-words max-w-sm min-w-[200px] border border-slate-700 leading-relaxed">
+            {/* Passive Tooltip on hover */}
+            <div className="absolute left-6 top-[calc(100%-12px)] opacity-0 invisible group-hover/cell:opacity-100 group-hover/cell:visible transition-all z-[60] shadow-xl scale-95 group-hover/cell:scale-100 origin-top-left pointer-events-none">
+                <div className="bg-slate-900 text-slate-100 text-[11px] font-bold px-3 py-2 rounded-lg whitespace-normal break-words max-w-xs border border-slate-700 leading-relaxed shadow-xl">
                     {val}
                 </div>
-                <button 
-                    onClick={handleCopy}
-                    className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 border-y border-slate-700 transition-colors flex items-center justify-center border-l border-r hover:bg-slate-700 outline-none"
-                    title="Copy to clipboard"
-                >
-                    {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                </button>
-                {isUrl ? (
-                    <a 
-                        href={href}
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-r-xl transition-colors flex items-center justify-center border-y border-r border-emerald-600 border-l border-slate-700"
-                        title="Open link"
-                    >
-                        <ExternalLink className="w-4 h-4" />
-                    </a>
-                ) : (
-                    <div className="bg-slate-800 rounded-r-xl border-y border-r border-slate-700 w-2" />
-                )}
             </div>
         </td>
     );
