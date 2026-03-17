@@ -59,7 +59,7 @@ export async function getUniqueValues(filePath: string, columnName: string, limi
     });
 }
 
-export async function getBucketRows(filePath: string, rowIndices: number[], limit: number = 50) {
+export async function getBucketRows(filePath: string, rowIndices: number[], limit: number = 50, injectRowIndex: boolean = false) {
     return new Promise<any[]>((resolve, reject) => {
         const rows: any[] = [];
         const indexSet = new Set(rowIndices);
@@ -70,19 +70,21 @@ export async function getBucketRows(filePath: string, rowIndices: number[], limi
         Papa.parse(fileStream, {
             header: true,
             skipEmptyLines: true,
-            step: (results) => {
+            step: (results, parser) => {
                 if (indexSet.has(currentRowIndex)) {
+                    if (injectRowIndex) {
+                        (results.data as any).__rowIndex = currentRowIndex;
+                    }
                     rows.push(results.data);
                 }
                 currentRowIndex++;
                 if (rows.length >= limit) {
-                    // We could potentially stop here but PapaParse step doesn't have an easy "abort" without calling parser.abort()
-                    // For now, we'll just return when parsed
+                    parser.abort(); // Optimization: stop reading the big file once limit is reached
+                    resolve(rows);
                 }
             },
             complete: () => {
-                // Only return first 50 if we didn't stop
-                resolve(rows.slice(0, limit));
+                resolve(rows);
             },
             error: (error: any) => {
                 reject(error);

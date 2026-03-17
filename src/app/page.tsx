@@ -243,6 +243,8 @@ export default function Home() {
     setCheckedBucketIds(newChecked);
   };
 
+  const [isExporting, setIsExporting] = useState(false);
+
   const getSelectedRowCount = () => {
     if (!analysis) return 0;
     
@@ -258,6 +260,52 @@ export default function Home() {
     };
     walk(analysis.rootBuckets);
     return total;
+  };
+
+  const handleExportSelected = async () => {
+    if (!analysisId || !workbook || checkedBucketIds.size === 0) return;
+    setIsExporting(true);
+    try {
+      const res = await fetch(`/api/workbooks/${workbook.id}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          analysisId,
+          bucketIds: Array.from(checkedBucketIds)
+        })
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Export failed");
+      }
+
+      // Read response as Blob
+      const blob = await res.blob();
+      
+      // Get filename from Content-Disposition header if possible
+      const contentDisposition = res.headers.get("Content-Disposition");
+      let filename = "export.csv";
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) filename = match[1];
+      }
+
+      // Create a link and trigger download
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+    } catch (e: any) {
+      alert("Failed to export: " + e.message);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -459,11 +507,16 @@ export default function Home() {
               Limpiar
             </button>
             <button 
-              className="bg-primary hover:bg-emerald-600 text-white font-bold py-2 px-5 rounded-full text-sm shadow-lg shadow-primary/20 transition-all flex items-center gap-2"
-              onClick={() => alert('Exporting phase coming next!')}
+              className={`bg-primary hover:bg-emerald-600 text-white font-bold py-2 px-5 rounded-full text-sm shadow-lg shadow-primary/20 transition-all flex items-center gap-2 ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
+              onClick={handleExportSelected}
+              disabled={isExporting}
             >
-              <DownloadCloud className="w-4 h-4" />
-              Exportar CSV
+              {isExporting ? (
+                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+              ) : (
+                <DownloadCloud className="w-4 h-4" />
+              )}
+              {isExporting ? 'Exportando...' : 'Exportar CSV'}
             </button>
           </div>
         </div>
