@@ -29,7 +29,7 @@ function DataCell({ value }: { value: any }) {
             )}
             
             {/* Tooltip on hover */}
-            <div className="absolute left-6 top-1/2 -translate-y-1/2 opacity-0 invisible group-hover/cell:opacity-100 group-hover/cell:visible transition-all z-[60] flex items-stretch shadow-2xl scale-95 group-hover/cell:scale-100 origin-left">
+            <div className="absolute left-6 top-[calc(100%-10px)] opacity-0 invisible group-hover/cell:opacity-100 group-hover/cell:visible transition-all z-[60] flex items-stretch shadow-2xl scale-95 group-hover/cell:scale-100 origin-top-left">
                 <div className="bg-slate-900 text-slate-100 text-sm px-4 py-2.5 rounded-l-xl whitespace-normal break-words max-w-sm min-w-[200px] border border-slate-700 leading-relaxed">
                     {val}
                 </div>
