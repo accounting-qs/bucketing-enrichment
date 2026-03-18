@@ -120,18 +120,29 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
         // 2. Separate strictly Exact Matches from Unknowns
         const aiTargetStrings: string[] = [];
+        let inclusiveMapHits = 0;
+        const exactKeys = Array.from(exactMatchLookup.keys());
+
         for (const str of sortedUniqueStrings) {
             const key = str.toLowerCase();
             if (exactMatchLookup.has(key)) {
                 // Instantly map exact matches for free and speed!
                 valueMap[key] = exactMatchLookup.get(key)!;
             } else {
-                aiTargetStrings.push(str);
+                // INCLUSIVE MATCH (Solution 1): Does the string contain any official category natively?
+                const foundMatch = exactKeys.find(matchKey => key.includes(matchKey));
+                if (foundMatch) {
+                    valueMap[key] = exactMatchLookup.get(foundMatch)!;
+                    inclusiveMapHits++;
+                } else {
+                    aiTargetStrings.push(str);
+                }
             }
         }
 
-        // We only send the top Unknowns to AI (Cost savings & limits)
-        const cappedAiTargets = aiTargetStrings.slice(0, 5000);
+        // Send all unknowns to AI but capped to a very high safety limit to avoid extreme bankruptcy
+        const maxAiTargetsLimit = 60000;
+        const cappedAiTargets = aiTargetStrings.slice(0, maxAiTargetsLimit);
         
         const BATCH_SIZE = 150; // Increased batch size since models can handle 150 easy
         const nodeToPath: Map<string, BucketNode[]> = new Map();
@@ -141,6 +152,8 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             [`AI processing ${cappedAiTargets.length} unmapped values...`, new Date().toISOString(), jobId]);
 
         let totalMappingsReceived = 0;
+        let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
         for (let i = 0; i < cappedAiTargets.length; i += BATCH_SIZE) {
             const batch = cappedAiTargets.slice(i, i + BATCH_SIZE);
             const batchProgress = 10 + Math.floor((i / cappedAiTargets.length) * 40); 
@@ -166,6 +179,12 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
             if (result?.mappings) {
                 totalMappingsReceived += result.mappings.length;
+                if (result.usage) {
+                    tokenUsage.promptTokens += result.usage.promptTokens || 0;
+                    tokenUsage.completionTokens += result.usage.completionTokens || 0;
+                    tokenUsage.totalTokens += result.usage.totalTokens || 0;
+                }
+
                 result.mappings.forEach((m: any) => {
                     if (!m.path || m.path.length === 0) return;
                     
@@ -271,6 +290,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
         // 6. Finalize and Save JSON Result
         const analysisId = uuidv4();
+        
         const finalResult = {
             workbookId,
             selectedColumn,
@@ -283,6 +303,29 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 totalProcessed: totalRowsProcessed
             }
         };
+
+        const logData = {
+            workbookId,
+            jobId,
+            analysisId,
+            startedAt: finalResult.createdAt,
+            completedAt: new Date().toISOString(),
+            metrics: {
+                totalUniqueStrings: sortedUniqueStrings.length,
+                exactMatchesAutoAssigned: sortedUniqueStrings.length - aiTargetStrings.length - inclusiveMapHits,
+                inclusiveMatchesAutoAssigned: inclusiveMapHits,
+                aiProcessedPoolSent: cappedAiTargets.length,
+                aiDiscardedBySafetyLimit: Math.max(0, aiTargetStrings.length - maxAiTargetsLimit)
+            },
+            aiTokenUsage: tokenUsage,
+            providerUsed: provider,
+            finalResults: finalResult.stats
+        };
+
+        // Save detailed logging report
+        const logsDir = path.join(process.cwd(), "data", "logs");
+        await fs.mkdir(logsDir, { recursive: true });
+        await fs.writeFile(path.join(logsDir, `report_${analysisId}.json`), JSON.stringify(logData, null, 2));
 
         const analysisDir = path.join(process.cwd(), "data", "analysis");
         await fs.mkdir(analysisDir, { recursive: true });

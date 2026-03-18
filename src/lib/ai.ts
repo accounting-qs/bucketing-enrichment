@@ -143,6 +143,8 @@ export async function mapBatchToTaxonomy(
     if (!apiKey) return { mappings: [] };
 
     let responseText = "";
+    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
     if (provider === "openai") {
       const openai = new OpenAI({ apiKey });
       const res = await openai.chat.completions.create({
@@ -151,6 +153,11 @@ export async function mapBatchToTaxonomy(
         response_format: { type: "json_object" }
       });
       responseText = res.choices[0].message.content || "{}";
+      if (res.usage) {
+          usage.promptTokens = res.usage.prompt_tokens;
+          usage.completionTokens = res.usage.completion_tokens;
+          usage.totalTokens = res.usage.total_tokens;
+      }
     } else if (provider === "claude") {
       const anthropic = new Anthropic({ apiKey });
       const res = await anthropic.messages.create({
@@ -159,18 +166,30 @@ export async function mapBatchToTaxonomy(
         messages: [{ role: "user", content: prompt + "\n\n" + commonSystem }],
       });
       responseText = res.content[0].type === 'text' ? res.content[0].text : '{}';
+      if (res.usage) {
+          usage.promptTokens = res.usage.input_tokens;
+          usage.completionTokens = res.usage.output_tokens;
+          usage.totalTokens = res.usage.input_tokens + res.usage.output_tokens;
+      }
     } else {
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: actualModel || "gemini-2.5-flash" });
       const res = await model.generateContent(prompt + "\n\n" + commonSystem);
       responseText = res.response.text();
+      if (res.response.usageMetadata) {
+          usage.promptTokens = res.response.usageMetadata.promptTokenCount;
+          usage.completionTokens = res.response.usageMetadata.candidatesTokenCount;
+          usage.totalTokens = res.response.usageMetadata.totalTokenCount;
+      }
     }
 
     const cleanJson = responseText.replace(/```json\n?|\n?```/g, "").trim();
-    return JSON.parse(cleanJson);
+    const result = JSON.parse(cleanJson);
+    result.usage = usage;
+    return result;
   } catch (err) {
     console.error(">>> BATCH MAPPING ERROR:", err);
-    return { mappings: [] };
+    return { mappings: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
   }
 }
 
