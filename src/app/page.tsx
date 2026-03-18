@@ -8,6 +8,7 @@ import FinderTree from "@/components/FinderTree";
 import DataPreview from "@/components/DataPreview";
 import SuggestionModal, { SuggestedBucket } from "@/components/SuggestionModal";
 import TaxonomyConfirmationModal from "@/components/TaxonomyConfirmationModal";
+import HistoryDashboard from "@/components/HistoryDashboard";
 import {
   LayoutDashboard,
   Database,
@@ -38,6 +39,7 @@ export default function Home() {
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [activeJob, setActiveJob] = useState<{ id: string; progress: number; message: string; status: string; resultId?: string } | null>(null);
   const [showReport, setShowReport] = useState(false);
+  const [viewMode, setViewMode] = useState<"analyze" | "history">("analyze");
 
   const handleUpload = async (file: File) => {
     const formData = new FormData();
@@ -411,6 +413,13 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setViewMode(viewMode === 'history' ? 'analyze' : 'history')} 
+              className={`p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-zinc-900 rounded-lg relative transition-colors ${viewMode === 'history' ? 'bg-slate-100 dark:bg-zinc-900 text-primary' : ''}`}
+              title="History & Logs"
+            >
+              <Database className="w-5 h-5" />
+            </button>
             <button className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-zinc-900 rounded-lg relative transition-colors">
               <Bell className="w-5 h-5" />
               <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white dark:border-zinc-950"></span>
@@ -422,7 +431,23 @@ export default function Home() {
         </header>
 
         <main className="p-8 flex-1 flex flex-col min-w-0 min-h-0">
-          {!workbook ? (
+          {viewMode === "history" ? (
+            <HistoryDashboard 
+              onViewLog={async (analysisId) => {
+                try {
+                  const res = await fetch(`/api/analyses/${analysisId}`);
+                  const data = await res.json();
+                  if (data.error) throw new Error(data.error);
+                  setAnalysisId(analysisId);
+                  setAnalysis(data);
+                  setViewMode("analyze");
+                  setShowReport(true);
+                } catch(e) {
+                  alert("Failed to load analysis: " + e);
+                }
+              }} 
+            />
+          ) : !workbook ? (
             <div className="animate-reveal space-y-8">
               <div>
                 <h1 className="text-3xl font-display font-bold">Welcome Back, Ingestion Module!</h1>
