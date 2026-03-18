@@ -25,6 +25,7 @@ export interface AnalysisResult {
   stats: {
     uniqueValues: number;
     emptyCount: number;
+    logData?: any;
   };
 }
 

@@ -168,14 +168,21 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 try {
                     result = await mapBatchToTaxonomy(selectedColumn, batch, confirmedBuckets, provider);
                     if (result && result.mappings) break;
-                    throw new Error("Empty mapping result");
+                    throw new Error("Empty mapping result from provider");
                 } catch (e: any) {
-                    console.error(`!!! Batch error [${jobId}]:`, e.message);
+                    console.error(`!!! Batch error [${jobId}] Retries left ${retries - 1}:`, e.message);
                     retries--;
-                    if (retries === 0) break;
-                    await new Promise(r => setTimeout(r, 2000));
+                    if (retries === 0) {
+                        console.error(`!!! FATAL: Batch failed 3 retries. Abandoning batch mapping.`);
+                        break;
+                    }
+                    // Exponential backoff for strict rate limits on 60,000 batches
+                    await new Promise(r => setTimeout(r, 3000 * (4 - retries)));
                 }
             }
+
+            // Global spacer delay to avoid slamming the API rate limit (Tokens per Min & Requests per Min)
+            await new Promise(r => setTimeout(r, 1500));
 
             if (result?.mappings) {
                 totalMappingsReceived += result.mappings.length;
@@ -291,7 +298,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         // 6. Finalize and Save JSON Result
         const analysisId = uuidv4();
         
-        const finalResult = {
+        const finalResult: any = {
             workbookId,
             selectedColumn,
             createdAt: new Date().toISOString(),
@@ -322,10 +329,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             finalResults: finalResult.stats
         };
 
-        // Save detailed logging report
-        const logsDir = path.join(process.cwd(), "data", "logs");
-        await fs.mkdir(logsDir, { recursive: true });
-        await fs.writeFile(path.join(logsDir, `report_${analysisId}.json`), JSON.stringify(logData, null, 2));
+        finalResult.stats.logData = logData; // Append logs to DB natively via text payload
 
         const analysisDir = path.join(process.cwd(), "data", "analysis");
         await fs.mkdir(analysisDir, { recursive: true });

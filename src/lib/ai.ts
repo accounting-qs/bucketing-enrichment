@@ -189,7 +189,7 @@ export async function mapBatchToTaxonomy(
     return result;
   } catch (err) {
     console.error(">>> BATCH MAPPING ERROR:", err);
-    return { mappings: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+    throw err;
   }
 }
 

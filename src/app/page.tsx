@@ -37,6 +37,7 @@ export default function Home() {
   const [analysisContext, setAnalysisContext] = useState<any>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [activeJob, setActiveJob] = useState<{ id: string; progress: number; message: string; status: string; resultId?: string } | null>(null);
+  const [showReport, setShowReport] = useState(false);
 
   const handleUpload = async (file: File) => {
     const formData = new FormData();
@@ -218,6 +219,7 @@ export default function Home() {
     setCheckedBucketIds(new Set());
     setPendingSuggestions(null);
     setAnalysisContext(null);
+    setShowReport(false);
   };
 
   const handleCheckToggle = (node: BucketNode, checked: boolean) => {
@@ -325,6 +327,75 @@ export default function Home() {
           onConfirm={handleFinalizeTaxonomy}
           onCancel={() => setProposedTaxonomy(null)}
         />
+      )}
+
+      {showReport && analysis?.stats?.logData && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md px-4">
+          <div className="bg-white dark:bg-zinc-950 w-full max-w-2xl rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-8 relative overflow-hidden flex flex-col max-h-[90vh]">
+            <button
+              onClick={() => setShowReport(false)}
+              className="absolute top-6 right-6 text-slate-500 hover:text-white transition-colors"
+            >
+              Close
+            </button>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-3 bg-emerald-500/20 text-emerald-500 rounded-xl">
+                <Database className="w-6 h-6" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold font-display">Analysis Flight Report</h2>
+                <p className="text-slate-500 text-sm">Processed using {analysis.stats.logData.providerUsed}</p>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto pr-2 space-y-6 flex-1 min-h-0">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-slate-100 dark:border-zinc-800">
+                  <p className="text-sm text-slate-500 mb-1">Total Unique Strings</p>
+                  <p className="text-xl font-bold">{analysis.stats.logData.metrics.totalUniqueStrings.toLocaleString()}</p>
+                </div>
+                <div className="bg-slate-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-slate-100 dark:border-zinc-800">
+                  <p className="text-sm text-slate-500 mb-1">AI Processed Pool</p>
+                  <p className="text-xl font-bold text-amber-500">{analysis.stats.logData.metrics.aiProcessedPoolSent.toLocaleString()}</p>
+                </div>
+                <div className="bg-slate-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-slate-100 dark:border-zinc-800">
+                  <p className="text-sm text-slate-500 mb-1">Free Exact Matches</p>
+                  <p className="text-xl font-bold text-emerald-500">{analysis.stats.logData.metrics.exactMatchesAutoAssigned.toLocaleString()}</p>
+                </div>
+                <div className="bg-slate-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-slate-100 dark:border-zinc-800">
+                  <p className="text-sm text-slate-500 mb-1">Free Inclusive Matches</p>
+                  <p className="text-xl font-bold text-primary">{analysis.stats.logData.metrics.inclusiveMatchesAutoAssigned.toLocaleString()}</p>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-3 border-b border-slate-800 pb-2">AI Token Usage Metadata</h3>
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div className="p-3">
+                    <p className="text-2xl font-display font-bold">{analysis.stats.logData.aiTokenUsage.promptTokens.toLocaleString()}</p>
+                    <p className="text-xs text-slate-500 uppercase mt-1">Prompt</p>
+                  </div>
+                  <div className="p-3">
+                    <p className="text-2xl font-display font-bold text-cyan-500">{analysis.stats.logData.aiTokenUsage.completionTokens.toLocaleString()}</p>
+                    <p className="text-xs text-slate-500 uppercase mt-1">Completion</p>
+                  </div>
+                  <div className="p-3">
+                    <p className="text-2xl font-display font-bold text-primary">{analysis.stats.logData.aiTokenUsage.totalTokens.toLocaleString()}</p>
+                    <p className="text-xs text-slate-500 uppercase mt-1">Total Tokens</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="pt-6 border-t border-slate-200 dark:border-slate-800">
+              <button 
+                onClick={() => setShowReport(false)}
+                className="w-full bg-slate-800 hover:bg-slate-700 font-bold py-3 rounded-xl transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Main Content Area */}
@@ -451,8 +522,16 @@ export default function Home() {
                     </button>
                     <span className="truncate">{workbook.filename}</span>
                   </h2>
-                  <p className="text-sm text-slate-500 mt-1 truncate">
-                    Analysing <span className="text-primary font-bold">"{analysis.selectedColumn}"</span> • {analysis.stats.uniqueValues} unique values
+                  <p className="text-sm text-slate-500 mt-1 truncate flex items-center gap-2">
+                    <span>Analysing <span className="text-primary font-bold">"{analysis.selectedColumn}"</span> • {analysis.stats.uniqueValues} unique values</span>
+                    {analysis.stats.logData && (
+                      <button 
+                        onClick={() => setShowReport(true)}
+                        className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-1 px-3 rounded-full transition-colors inline-block ml-4"
+                      >
+                        View Report
+                      </button>
+                    )}
                   </p>
                 </div>
                 <button 
