@@ -121,20 +121,20 @@ export default function ColumnSelector({
                         <select
                             id="provider-select"
                             className="w-full bg-slate-100 dark:bg-zinc-900 border-2 border-transparent focus:border-primary rounded-xl px-5 py-3.5 text-sm font-bold outline-none cursor-pointer transition-all"
-                            defaultValue="claude:claude-4-6-sonnet"
+                            defaultValue="claude:claude-3-7-sonnet-latest"
                         >
                             <option value="none" className="font-semibold text-slate-500">Deterministic (No AI)</option>
                             <optgroup label="Anthropic (Claude)" className="font-bold">
-                                <option value="claude:claude-4-6-sonnet">Claude 4.6 Sonnet (Latest & Best)</option>
-                                <option value="claude:claude-4-6-opus">Claude 4.6 Opus (Deep Reasoning)</option>
+                                <option value="claude:claude-3-7-sonnet-latest">Claude 3.7 Sonnet (Latest & Best)</option>
+                                <option value="claude:claude-3-opus-latest">Claude 3 Opus (Deep Reasoning)</option>
                             </optgroup>
                             <optgroup label="Google (Gemini)" className="font-bold">
-                                <option value="gemini:gemini-3.1-pro">Gemini 3.1 Pro (Powerful)</option>
-                                <option value="gemini:gemini-3.0-flash">Gemini 3.0 Flash (Fast)</option>
+                                <option value="gemini:gemini-1.5-pro">Gemini 1.5 Pro (Powerful)</option>
+                                <option value="gemini:gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
                             </optgroup>
                             <optgroup label="OpenAI (GPT)" className="font-bold">
-                                <option value="openai:gpt-5.4">GPT-5.4 (Versatile Frontier)</option>
-                                <option value="openai:gpt-5.3-instant">GPT-5.3 Instant (Fast & Efficient)</option>
+                                <option value="openai:gpt-4o">GPT-4o (Versatile Frontier)</option>
+                                <option value="openai:gpt-4o-mini">GPT-4o Mini (Fast & Efficient)</option>
                             </optgroup>
                         </select>
                     </div>
