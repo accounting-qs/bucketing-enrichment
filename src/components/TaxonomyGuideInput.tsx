@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { FileJson, X, ChevronDown, ChevronUp, CheckCircle2, AlertCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { FileJson, X, ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Sparkles } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { defaultTaxonomy } from "@/lib/defaultTaxonomy";
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -14,10 +15,16 @@ export default function TaxonomyGuideInput({
 }: {
     onGuideChange: (guide: any[] | null) => void
 }) {
-    const [isOpen, setIsOpen] = useState(false);
-    const [jsonText, setJsonText] = useState("");
+    const [isOpen, setIsOpen] = useState(true);
+    const [jsonText, setJsonText] = useState(() => JSON.stringify(defaultTaxonomy, null, 2));
     const [error, setError] = useState<string | null>(null);
-    const [isValid, setIsValid] = useState(false);
+    const [isValid, setIsValid] = useState(true);
+
+    // Auto-load default into parent state on mount
+    useEffect(() => {
+        onGuideChange(defaultTaxonomy);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const handleTextChange = (text: string) => {
         setJsonText(text);
@@ -69,6 +76,16 @@ export default function TaxonomyGuideInput({
 
             {isOpen && (
                 <div className="p-5 border-t border-slate-200 dark:border-slate-800 space-y-4 animate-reveal">
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">JSON Structure</span>
+                        <button 
+                            onClick={() => handleTextChange(JSON.stringify(defaultTaxonomy, null, 2))}
+                            className="text-[10px] font-bold text-primary bg-primary/10 px-2.5 py-1.5 rounded-md hover:bg-primary/20 transition-colors flex items-center gap-1.5"
+                        >
+                            <Sparkles className="w-3 h-3" />
+                            Load Default B2B/Investment
+                        </button>
+                    </div>
                     <div className="relative">
                         <textarea
                             value={jsonText}
