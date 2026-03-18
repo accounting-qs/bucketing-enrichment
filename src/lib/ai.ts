@@ -13,7 +13,8 @@ export async function proposeTaxonomy(
   columnName: string,
   sampleValues: Array<{ value: string; count: number }>,
   providerInput: string,
-  guide?: any[] | null
+  guide?: any[] | null,
+  customApiKey?: string
 ): Promise<TaxonomyNode[]> {
   const prompt = `
     You are a Strategic Data Architect. I have a dataset with a column named "${columnName}".
@@ -54,14 +55,25 @@ export async function proposeTaxonomy(
       [provider, actualModel] = providerInput.split(':');
     }
 
-    const apiKey = getApiKey(provider);
-    if (!apiKey) return [];
+    const apiKey = customApiKey || getApiKey(provider);
+    if (!apiKey) throw new Error(`Missing API Key for provider: ${provider}`);
 
     let responseText = "";
     if (provider === "openai") {
       const openai = new OpenAI({ apiKey });
       const res = await openai.chat.completions.create({
         model: actualModel || "gpt-4o",
+        messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
+        response_format: { type: "json_object" }
+      });
+      responseText = res.choices[0].message.content || "[]";
+    } else if (provider === "openrouter") {
+      const openrouter = new OpenAI({ 
+        baseURL: "https://openrouter.ai/api/v1", 
+        apiKey 
+      });
+      const res = await openrouter.chat.completions.create({
+        model: actualModel || "meta-llama/llama-3.3-70b-instruct",
         messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
         response_format: { type: "json_object" }
       });
@@ -94,7 +106,8 @@ export async function mapBatchToTaxonomy(
   columnName: string,
   batchValues: string[],
   parentBuckets: TaxonomyNode[],
-  providerInput: string
+  providerInput: string,
+  customApiKey?: string
 ): Promise<any> {
   // Simplify the tree for the prompt to save tokens, just sending names structure
   const simplifiedStructure = JSON.stringify(parentBuckets, (key, value) => {
@@ -103,34 +116,38 @@ export async function mapBatchToTaxonomy(
   });
 
   const prompt = `
-    You are a Data Architect. Map the following batch of values from the column "${columnName}" to the predefined TAXONOMY.
+    You are matching a batch of company records or specific dimension values to an existing industry taxonomy.
     
-    TAXONOMY STRUCTURE:
+    TAXONOMY STRUCTURE ALREADY APPROVED BY USER:
     ${simplifiedStructure}
 
     BATCH VALUES TO MAP:
     ${JSON.stringify(batchValues)}
 
     GOAL:
-    1. CRITICAL: You MUST map EVERY single value in the "BATCH VALUES TO MAP" list.
-    2. BE AGGRESSIVE: Do NOT use "General / Unformatted" unless the value is completely unreadable or nonsensical.
+    1. CRITICAL: You MUST map EVERY single value in the "BATCH VALUES TO MAP" list. Leave no value behind.
+    2. Try to map each value accurately to the taxonomy above.
     3. BEST FIT: Even if a value doesn't match 100%, assign it to the Parent/Category that makes the most sense.
-    4. SPECIFICITY: Assign to the deepest possible level (Leaf) of the taxonomy provided.
-    5. STRICT RULES: DO NOT create, hallucinate, or invent ANY new buckets, child names, or paths. You MUST ONLY use paths that exist exactly in the TAXONOMY STRUCTURE. If a value absolutely does not fit anywhere, map it to the path ["General / Unformatted"].
-    6. Return the full PATH as an array of strings (e.g., ["Real Estate", "Residential"]).
+    4. MUST EXACT MATCH: The bucket_3, bucket_2, and bucket_1 fields MUST match the actual taxonomy paths above perfectly (bucket_3 = root, bucket_1 = leaf).
 
-    OUTPUT FORMAT (JSON):
+    OUTPUT FORMAT: You MUST return a JSON object exactly following this structure, with no markdown wrappers or preambles.
     {
       "mappings": [
         {
           "value": "Exact String from Batch",
-          "path": ["Parent Name", "Child Name", "Leaf Name"]
+          "bucket_3": "Root Category (must exact match taxonomy)",
+          "bucket_2": "Parent Category (must exact match taxonomy)",
+          "bucket_1": "Leaf Category (must exact match taxonomy)",
+          "reason": "Very brief reasoning for classification",
+          "confidence": 0.95,
+          "is_generic": false,
+          "is_disqualified": false
         }
       ]
     }
   `;
 
-  const commonSystem = "Return JSON only. No markdown.";
+  const commonSystem = "Return JSON only. Strict JSON formatting limit.";
 
   try {
     let provider = providerInput;
@@ -139,8 +156,8 @@ export async function mapBatchToTaxonomy(
       [provider, actualModel] = providerInput.split(':');
     }
 
-    const apiKey = getApiKey(provider);
-    if (!apiKey) return { mappings: [] };
+    const apiKey = customApiKey || getApiKey(provider);
+    if (!apiKey) throw new Error(`Missing API Key for provider: ${provider}`);
 
     let responseText = "";
     let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -149,6 +166,22 @@ export async function mapBatchToTaxonomy(
       const openai = new OpenAI({ apiKey });
       const res = await openai.chat.completions.create({
         model: actualModel || "gpt-4o",
+        messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
+        response_format: { type: "json_object" }
+      });
+      responseText = res.choices[0].message.content || "{}";
+      if (res.usage) {
+          usage.promptTokens = res.usage.prompt_tokens;
+          usage.completionTokens = res.usage.completion_tokens;
+          usage.totalTokens = res.usage.total_tokens;
+      }
+    } else if (provider === "openrouter") {
+      const openrouter = new OpenAI({ 
+        baseURL: "https://openrouter.ai/api/v1", 
+        apiKey 
+      });
+      const res = await openrouter.chat.completions.create({
+        model: actualModel || "meta-llama/llama-3.3-70b-instruct",
         messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
         response_format: { type: "json_object" }
       });
@@ -186,6 +219,33 @@ export async function mapBatchToTaxonomy(
     const cleanJson = responseText.replace(/```json\n?|\n?```/g, "").trim();
     const result = JSON.parse(cleanJson);
     result.usage = usage;
+    
+    // Polyfill the new strict schema into the old nested array path structure for compatibility
+    if (result.mappings && Array.isArray(result.mappings)) {
+      result.mappings = result.mappings.map((m: any) => {
+        let path: string[] = [];
+        if (m.is_disqualified || m.is_generic || (!m.bucket_3 && !m.bucket_2 && !m.bucket_1)) {
+           // Provide a graceful fallback
+           path = ["General / Unformatted"];
+        } else {
+           // Construct valid path from top to bottom
+           if (m.bucket_3) path.push(m.bucket_3);
+           if (m.bucket_2) path.push(m.bucket_2);
+           if (m.bucket_1) path.push(m.bucket_1);
+        }
+        
+        return {
+           value: m.value,
+           path: path,
+           reason: m.reason || "",
+           confidence: m.confidence || 1.0,
+           is_generic: !!m.is_generic,
+           is_disqualified: !!m.is_disqualified,
+           original_bucket_1: m.bucket_1
+        };
+      });
+    }
+
     return result;
   } catch (err) {
     console.error(">>> BATCH MAPPING ERROR:", err);

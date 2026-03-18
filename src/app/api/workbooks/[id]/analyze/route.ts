@@ -14,7 +14,7 @@ export async function POST(
     { params }: { params: Promise<{ id: string }> }
 ) {
     const { id } = await params;
-    const { selectedColumn, provider = "none", guide = null } = await req.json();
+    const { selectedColumn, provider = "none", guide = null, maxRowsToProcess, customApiKey } = await req.json();
 
     try {
         const workbook = await db.getOne("SELECT * FROM workbooks WHERE id = ?", [id]);
@@ -45,7 +45,9 @@ export async function POST(
                 workbookId: id,
                 selectedColumn,
                 provider,
-                uniqueValues
+                uniqueValues,
+                maxRowsToProcess,
+                customApiKey
             }
         });
 

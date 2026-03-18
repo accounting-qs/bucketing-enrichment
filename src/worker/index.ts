@@ -58,7 +58,7 @@ function findPathToNode(nodes: BucketNode[], targetId: string, currentPath: Buck
 
 const worker = new Worker('workbook-analysis', async (job: Job) => {
     const { jobId, workbookId, options } = job.data;
-    const { selectedColumn, confirmedBuckets, provider, minClusterSize = 50 } = options;
+    const { selectedColumn, confirmedBuckets, provider, minClusterSize = 50, maxRowsToProcess, customApiKey } = options;
 
     try {
         console.log(`>>> Starting Job [${jobId}] for Workbook [${workbookId}]`);
@@ -102,7 +102,9 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
         // OPTIMIZATION: Sort unique values by frequency, and only send the top N to AI.
         // This is crucial for large datasets (60k+ unique values) to avoid API fatigue and timeouts.
-        const sortedUniqueStrings = frequencyRows.map(row => row.val?.toString().trim()).filter(Boolean);
+        const allUniqueStrings = frequencyRows.map(row => row.val?.toString().trim()).filter(Boolean);
+        const maxLimit = maxRowsToProcess && maxRowsToProcess > 0 ? maxRowsToProcess : allUniqueStrings.length;
+        const sortedUniqueStrings = allUniqueStrings.slice(0, maxLimit);
 
         // --- NEW HYBRID WORKFLOW (OPTION C) ---
 
@@ -153,8 +155,19 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
         let totalMappingsReceived = 0;
         let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+        const lowConfidenceItems: any[] = [];
+        const valueMetadata: Record<string, any> = {};
+        let isCancelled = false;
 
         for (let i = 0; i < cappedAiTargets.length; i += BATCH_SIZE) {
+            // Check for user-driven cancellation/pause every batch
+            const jobStatus = await db.getOne('SELECT status FROM jobs WHERE id = ?', [jobId]);
+            if (jobStatus?.status === 'cancelling' || jobStatus?.status === 'cancelled') {
+                console.log(`>>> Job [${jobId}] ABORT SIGNAL RECEIVED. Halting AI Mapping early...`);
+                isCancelled = true;
+                break;
+            }
+
             const batch = cappedAiTargets.slice(i, i + BATCH_SIZE);
             const batchProgress = 10 + Math.floor((i / cappedAiTargets.length) * 40); 
 
@@ -166,7 +179,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
             while (retries > 0) {
                 try {
-                    result = await mapBatchToTaxonomy(selectedColumn, batch, confirmedBuckets, provider);
+                    result = await mapBatchToTaxonomy(selectedColumn, batch, confirmedBuckets, provider, customApiKey);
                     if (result && result.mappings) break;
                     throw new Error("Empty mapping result from provider");
                 } catch (e: any) {
@@ -216,13 +229,32 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
 
                     if (m.value) {
                         const originalKey = batch.find(k => k.toLowerCase().trim() === m.value.toLowerCase().trim()) || m.value;
-                        if (lastNode) {
-                            valueMap[originalKey.toLowerCase().trim()] = lastNode;
+                        const lookupKey = originalKey.toLowerCase().trim();
+
+                        valueMetadata[lookupKey] = {
+                            confidence: m.confidence,
+                            reason: m.reason,
+                            is_generic: m.is_generic,
+                            is_disqualified: m.is_disqualified
+                        };
+                        
+                        if (m.confidence !== undefined && m.confidence < 0.8) {
+                            lowConfidenceItems.push({
+                                value: originalKey,
+                                mappedPath: m.path,
+                                confidence: m.confidence,
+                                reason: m.reason,
+                                original_bucket: m.original_bucket_1
+                            });
+                        }
+
+                        if (lastNode && !m.is_disqualified) {
+                            valueMap[lookupKey] = lastNode;
                             const fullPath = findPathToNode(rootBuckets, lastNode.id);
                             if (fullPath) nodeToPath.set(lastNode.id, fullPath);
                         } else {
                             // Fallback to General Bucket if AI hallucinated paths or couldn't classify it properly
-                            valueMap[originalKey.toLowerCase().trim()] = generalBucket;
+                            valueMap[lookupKey] = generalBucket;
                         }
                     }
                 });
@@ -231,8 +263,11 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         console.log(`>>> Job [${jobId}] AI Rescue done. Total mappings processed: ${totalMappingsReceived}`);
 
         // 4. Grouping & Assigning Phase using DuckDB
+        const assignmentMessage = isCancelled 
+            ? 'Process paused. Saving partial AI completions directly to CSV... (DuckDB)'
+            : 'Assigning matched records directly to CSV... (DuckDB)';
         await db.query(`UPDATE jobs SET message = ?, progress = 55, updatedAt = ? WHERE id = ?`,
-            ['Assigning matched records directly to CSV... (DuckDB)', new Date().toISOString(), jobId]);
+            [assignmentMessage, new Date().toISOString(), jobId]);
 
         const unmappedRows: { index: number, value: string }[] = [];
         let totalRowsProcessed = 0;
@@ -303,6 +338,7 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
             selectedColumn,
             createdAt: new Date().toISOString(),
             rootBuckets,
+            valueMetadata,
             stats: {
                 uniqueValues: sortedUniqueStrings.length,
                 aiMapped: totalMappingsReceived,
@@ -322,8 +358,10 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
                 exactMatchesAutoAssigned: sortedUniqueStrings.length - aiTargetStrings.length - inclusiveMapHits,
                 inclusiveMatchesAutoAssigned: inclusiveMapHits,
                 aiProcessedPoolSent: cappedAiTargets.length,
-                aiDiscardedBySafetyLimit: Math.max(0, aiTargetStrings.length - maxAiTargetsLimit)
+                aiDiscardedBySafetyLimit: Math.max(0, aiTargetStrings.length - maxAiTargetsLimit),
+                lowConfidenceCount: lowConfidenceItems.length
             },
+            lowConfidenceItems,
             aiTokenUsage: tokenUsage,
             providerUsed: provider,
             finalResults: finalResult.stats
@@ -338,10 +376,13 @@ const worker = new Worker('workbook-analysis', async (job: Job) => {
         await db.query(`INSERT INTO analyses (id, workbookId, selectedColumn, createdAt, stats) VALUES (?, ?, ?, ?, ?)`,
             [analysisId, workbookId, selectedColumn, finalResult.createdAt, JSON.stringify(finalResult.stats)]);
 
-        await db.query(`UPDATE jobs SET status = ?, message = ?, progress = 100, resultId = ?, updatedAt = ? WHERE id = ?`,
-            ['completed', 'Analysis complete!', analysisId, new Date().toISOString(), jobId]);
+        const finalStatus = isCancelled ? 'completed_partial' : 'completed';
+        const finalMessage = isCancelled ? 'Analysis paused and progress saved!' : 'Analysis complete!';
 
-        console.log(`>>> Job [${jobId}] DONE. Analysis ID: ${analysisId}`);
+        await db.query(`UPDATE jobs SET status = ?, message = ?, progress = 100, resultId = ?, updatedAt = ? WHERE id = ?`,
+            [finalStatus, finalMessage, analysisId, new Date().toISOString(), jobId]);
+
+        console.log(`>>> Job [${jobId}] DONE (${finalStatus}). Analysis ID: ${analysisId}`);
         return { success: true, analysisId };
 
     } catch (error: any) {

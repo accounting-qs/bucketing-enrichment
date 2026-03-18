@@ -9,6 +9,7 @@ import DataPreview from "@/components/DataPreview";
 import SuggestionModal, { SuggestedBucket } from "@/components/SuggestionModal";
 import TaxonomyConfirmationModal from "@/components/TaxonomyConfirmationModal";
 import HistoryDashboard from "@/components/HistoryDashboard";
+import ReviewModal from "@/components/ReviewModal";
 import {
   LayoutDashboard,
   Database,
@@ -39,6 +40,7 @@ export default function Home() {
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [activeJob, setActiveJob] = useState<{ id: string; progress: number; message: string; status: string; resultId?: string } | null>(null);
   const [showReport, setShowReport] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
   const [viewMode, setViewMode] = useState<"analyze" | "history">("analyze");
 
   const handleUpload = async (file: File) => {
@@ -58,14 +60,14 @@ export default function Home() {
     }
   };
 
-  const handleAnalyze = async (selectedColumn: string, provider: string, minClusterSize: number = 50, guide?: any[] | null) => {
+  const handleAnalyze = async (selectedColumn: string, provider: string, minClusterSize: number = 50, maxRowsToProcess?: number, customApiKey?: string, guide?: any[] | null) => {
     if (!workbook) return;
     setIsAnalyzing(true);
     try {
       const res = await fetch(`/api/workbooks/${workbook.id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selectedColumn, provider, guide, minClusterSize }),
+        body: JSON.stringify({ selectedColumn, provider, guide, minClusterSize, maxRowsToProcess, customApiKey }),
       });
       const data = await res.json();
 
@@ -78,7 +80,9 @@ export default function Home() {
           uniqueValues: data.originalAnalysis.uniqueValues,
           workbookId: workbook.id,
           provider: data.originalAnalysis.provider,
-          minClusterSize
+          minClusterSize,
+          maxRowsToProcess,
+          customApiKey
         });
       } else if (data.needsConfirmation) {
         setPendingSuggestions(data.suggestedBuckets);
@@ -113,7 +117,9 @@ export default function Home() {
           confirmedBuckets,
           uniqueValues: analysisContext.uniqueValues,
           provider: analysisContext.provider,
-          minClusterSize: analysisContext.minClusterSize
+          minClusterSize: analysisContext.minClusterSize,
+          maxRowsToProcess: analysisContext.maxRowsToProcess,
+          customApiKey: analysisContext.customApiKey
         }),
       });
       const data = await res.json();
@@ -153,7 +159,8 @@ export default function Home() {
 
         setActiveJob(job);
 
-        if (job.status === 'completed') {
+        // Treat completed_partial identically to completed since it results in the mapped DB state.
+        if (job.status === 'completed' || job.status === 'completed_partial') {
           clearInterval(interval);
           if (job.resultId) {
             try {
@@ -222,6 +229,7 @@ export default function Home() {
     setPendingSuggestions(null);
     setAnalysisContext(null);
     setShowReport(false);
+    setShowReviewModal(false);
   };
 
   const handleCheckToggle = (node: BucketNode, checked: boolean) => {
@@ -499,7 +507,19 @@ export default function Home() {
                       <p className="text-center text-xs text-slate-400">
                         Job ID: {activeJob.id} • Process is running on a dedicated cloud worker
                       </p>
-                      {activeJob.status === 'completed' && (
+
+                      {(activeJob.status === 'processing' || activeJob.status === 'queued') && (
+                          <button 
+                            onClick={async () => {
+                                await fetch(`/api/jobs/${activeJob.id}/cancel`, { method: "POST" });
+                            }}
+                            className="w-full mt-4 py-2 border-2 border-slate-200 dark:border-slate-800 hover:border-red-500 hover:text-red-500 text-slate-500 rounded-xl font-bold transition-colors"
+                          >
+                             Pause & Save Partial Progress
+                          </button>
+                      )}
+
+                      {(activeJob.status === 'completed' || activeJob.status === 'completed_partial') && (
                         <button
                           onClick={async () => {
                             if (activeJob.resultId) {
@@ -555,6 +575,14 @@ export default function Home() {
                         className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-1 px-3 rounded-full transition-colors inline-block ml-4"
                       >
                         View Report
+                      </button>
+                    )}
+                    {analysis.stats.logData?.lowConfidenceItems?.length > 0 && (
+                      <button 
+                         onClick={() => setShowReviewModal(true)}
+                         className="text-xs bg-amber-500 hover:bg-amber-600 text-white font-bold py-1 px-3 rounded-full transition-colors inline-block ml-2 shadow-[0_0_15px_rgba(245,158,11,0.5)] animate-pulse"
+                      >
+                        ⚠️ {analysis.stats.logData.lowConfidenceItems.length} Low Confidence Matches
                       </button>
                     )}
                   </p>
@@ -624,6 +652,13 @@ export default function Home() {
             </button>
           </div>
         </div>
+      )}
+
+      {showReviewModal && analysis?.stats?.logData?.lowConfidenceItems && (
+        <ReviewModal
+          lowConfidenceItems={analysis.stats.logData.lowConfidenceItems}
+          onClose={() => setShowReviewModal(false)}
+        />
       )}
     </div>
   );

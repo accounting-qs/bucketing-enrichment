@@ -13,7 +13,9 @@ export async function POST(
         confirmedBuckets,
         uniqueValues,
         provider,
-        minClusterSize
+        minClusterSize,
+        maxRowsToProcess,
+        customApiKey
     } = await req.json();
 
     try {
@@ -37,7 +39,9 @@ export async function POST(
                 selectedColumn,
                 confirmedBuckets,
                 provider,
-                minClusterSize
+                minClusterSize,
+                maxRowsToProcess,
+                customApiKey
             }
         });
 

@@ -27,26 +27,22 @@ export async function POST(
         const analysisData = JSON.parse(await fs.readFile(analysisPath, "utf-8"));
 
         const originalColumns = JSON.parse(workbook.columns);
-        // Ensure "Bucket" and "Sub Bucket" exist as columns
-        const exportColumns = [...originalColumns, "Bucket", "Sub Bucket"];
+        const exportColumns = [...originalColumns, "Bucket 3 (Root)", "Bucket 2 (Parent)", "Bucket 1 (Leaf)", "AI Confidence", "Is Generic", "Is Disqualified", "AI Reasoning"];
 
         // Need to traverse tree and map nodes by ID so we can get path info quickly
         const nodeMap = new Map<string, any>();
         
         const buildNodeMap = (nodes: any[], parentNames: string[] = []) => {
             for (const node of nodes) {
-                // If this is a root node, it's the Bucket. Its children use it as Bucket and themselves as Sub Bucket.
-                const currentBucketName = parentNames.length > 0 ? parentNames[0] : node.name;
-                const currentSubBucketName = parentNames.length > 0 ? node.name : "";
+                const currentPath = [...parentNames, node.name];
 
                 nodeMap.set(node.id, {
                     ...node,
-                    bucketName: currentBucketName,
-                    subBucketName: currentSubBucketName
+                    path: currentPath
                 });
                 
                 if (node.children && node.children.length > 0) {
-                    buildNodeMap(node.children, [...parentNames, node.name]);
+                    buildNodeMap(node.children, currentPath);
                 }
             }
         };
@@ -55,7 +51,7 @@ export async function POST(
 
         // Fetch all selected rows from all selected nodes and all their children
         const allIndicesToFetch = new Set<number>();
-        const rowToBucketMapping = new Map<number, { bucket: string, subBucket: string }>();
+        const rowToBucketMapping = new Map<number, string[]>();
 
         const collectIndicesRecursively = (nodeId: string) => {
             const nodeInfo = nodeMap.get(nodeId);
@@ -65,11 +61,7 @@ export async function POST(
             nodeInfo.rowIndices.forEach((rowIndex: number) => {
                 allIndicesToFetch.add(rowIndex);
                 // In case of overlaps, keep the most specific one. 
-                // Using recursive traversal, children are processed, but we can just map it here directly
-                rowToBucketMapping.set(rowIndex, { 
-                    bucket: nodeInfo.bucketName, 
-                    subBucket: nodeInfo.subBucketName 
-                });
+                rowToBucketMapping.set(rowIndex, nodeInfo.path);
             });
 
             // Recurse to children if they exist
@@ -92,17 +84,29 @@ export async function POST(
         // Fetch rows and inject their row indices so we know who is who. Limit extremely large to get everything.
         const rows = await getBucketRows(workbook.storagePath, indicesArray, 10_000_000, true);
 
-        // Enhance the CSV rows with Bucket and Sub Bucket Info
+        // Enhance the CSV rows with full Hierarchical Buckets and Metadata
+        const metadataMap = analysisData.valueMetadata || {};
+        const selectedColumn = analysisData.selectedColumn;
+
         const processedRows = rows.map((row) => {
             const rowIndex = row.__rowIndex;
             delete row.__rowIndex; // Clean it up before exporting
             
-            const mapping = rowToBucketMapping.get(rowIndex) || { bucket: "Uncategorized", subBucket: "Uncategorized" };
+            const mappingPath = rowToBucketMapping.get(rowIndex) || ["Uncategorized"];
+            
+            // Extract original string from column
+            const cellValue = row[selectedColumn] ? String(row[selectedColumn]).toLowerCase().trim() : "";
+            const meta = metadataMap[cellValue] || {};
             
             return {
                 ...row,
-                Bucket: mapping.bucket,
-                "Sub Bucket": mapping.subBucket
+                "Bucket 3 (Root)": mappingPath[0] || "",
+                "Bucket 2 (Parent)": mappingPath[1] || "",
+                "Bucket 1 (Leaf)": mappingPath[2] || "",
+                "AI Confidence": meta.confidence !== undefined ? meta.confidence : "",
+                "Is Generic": meta.is_generic || false,
+                "Is Disqualified": meta.is_disqualified || false,
+                "AI Reasoning": meta.reason || ""
             };
         });
 
