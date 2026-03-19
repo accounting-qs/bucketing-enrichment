@@ -81,16 +81,20 @@ export default function ProjectDetailPage() {
   // ── Data Fetching ─────────────────────────────────────
   const fetchProject = useCallback(async () => {
     const res = await fetch(`/api/projects/${id}`);
-    if (res.ok) setProject(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      setProject(data.project || data);
+    }
   }, [id]);
 
   const fetchWorkbooks = useCallback(async () => {
     const res = await fetch(`/api/projects/${id}/workbooks`);
     if (res.ok) {
       const data = await res.json();
-      const wbs = (data || []).map((w: Workbook & { columns: string | string[] }) => ({
+      const raw = data.workbooks || data || [];
+      const wbs = (Array.isArray(raw) ? raw : []).map((w: Workbook & { columns: string | string[] }) => ({
         ...w,
-        columns: typeof w.columns === "string" ? JSON.parse(w.columns) : w.columns,
+        columns: typeof w.columns === "string" ? JSON.parse(w.columns) : (w.columns || []),
       }));
       setWorkbooks(wbs);
       if (wbs.length > 0 && !selectedWorkbook) {
@@ -104,11 +108,12 @@ export default function ProjectDetailPage() {
     const res = await fetch(`/api/projects/${id}/analyses`);
     if (res.ok) {
       const data = await res.json();
-      const parsed = (data || []).map((a: Analysis & { bucket_distribution: string | Record<string, number> }) => ({
+      const raw = data.analyses || data || [];
+      const parsed = (Array.isArray(raw) ? raw : []).map((a: Analysis & { bucket_distribution: string | Record<string, number> }) => ({
         ...a,
         bucket_distribution: typeof a.bucket_distribution === "string"
           ? JSON.parse(a.bucket_distribution)
-          : a.bucket_distribution,
+          : (a.bucket_distribution || {}),
       }));
       setAnalyses(parsed);
       if (parsed.length > 0) setExpandedSteps((s) => ({ ...s, 3: true }));
