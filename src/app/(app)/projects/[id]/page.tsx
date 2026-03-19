@@ -507,16 +507,24 @@ function AnalysisDetails({
   const dist = analysis.bucket_distribution || {};
 
   // Build full 26-bucket list: ALL taxonomy buckets with counts (0 if none)
+  // Any non-taxonomy bucket names (AI-invented) get merged into General Industry
   const { DEFAULT_TAXONOMY } = require("@/lib/defaultTaxonomy");
   const fullBuckets: [string, number][] = useMemo(() => {
     const bucketMap = new Map<string, number>();
+    const validNames = new Set<string>();
     // First add all taxonomy buckets with 0
     for (const b of DEFAULT_TAXONOMY) {
       bucketMap.set(b.bucket_name, 0);
+      validNames.add(b.bucket_name);
     }
-    // Then overlay actual counts
+    // Then overlay actual counts — merge invalid names into General Industry
     for (const [name, count] of Object.entries(dist)) {
-      bucketMap.set(name, count as number);
+      if (validNames.has(name)) {
+        bucketMap.set(name, (bucketMap.get(name) || 0) + (count as number));
+      } else {
+        // Merge AI-invented bucket into General Industry
+        bucketMap.set("General Industry", (bucketMap.get("General Industry") || 0) + (count as number));
+      }
     }
     return Array.from(bucketMap.entries()).sort(([, a], [, b]) => b - a);
   }, [dist]);

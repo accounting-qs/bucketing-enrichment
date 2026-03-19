@@ -38,6 +38,52 @@ function parseCSV(text: string): { headers: string[]; rows: Record<string, strin
 const BATCH_SIZE = 25;
 const PARALLEL_BATCHES = 2;
 
+/**
+ * Snap an AI-returned bucket name to the closest valid bucket.
+ * If AI invents "Digital Health", this finds "Healthcare & Medical Services".
+ */
+function snapToValidBucket(aiName: string, taxonomy: BucketDefinition[]): string {
+  if (!aiName || aiName.trim() === "") return "General Industry";
+
+  const validNames = taxonomy.map(b => b.bucket_name);
+
+  // Exact match (case-insensitive)
+  const exact = validNames.find(v => v.toLowerCase() === aiName.toLowerCase());
+  if (exact) return exact;
+
+  // Fuzzy: score by word overlap between AI name and each bucket's name + include keywords
+  const aiWords = new Set(aiName.toLowerCase().split(/[\s,&/]+/).filter(w => w.length > 2));
+  let bestBucket = "General Industry";
+  let bestScore = 0;
+
+  for (const bucket of taxonomy) {
+    if (bucket.bucket_name === "General Industry") continue;
+    let score = 0;
+
+    // Word overlap with bucket name
+    const bWords = bucket.bucket_name.toLowerCase().split(/[\s,&/]+/).filter(w => w.length > 2);
+    for (const w of bWords) {
+      if (aiWords.has(w)) score += 3;
+    }
+
+    // Word overlap with include keywords
+    for (const kw of bucket.include) {
+      const kwWords = kw.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      for (const w of kwWords) {
+        if (aiWords.has(w)) score += 1;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestBucket = bucket.bucket_name;
+    }
+  }
+
+  // Require minimum score to avoid random assignment
+  return bestScore >= 2 ? bestBucket : "General Industry";
+}
+
 // POST — start analysis (inline async processing without Redis)
 export async function POST(
   req: NextRequest,
@@ -439,8 +485,10 @@ async function processAIBatches(
       for (const res of results) {
         const row = rows[res.index];
         const originalValue = values.find(v => v.index === res.index)?.value || "";
-        const bucketName = res.bucket_1.name || "General Industry";
-        const isGeneric = res.generic || !res.bucket_1.name;
+        // CRITICAL: Snap AI bucket to valid taxonomy name (prevents extra buckets)
+        const rawBucket = res.bucket_1.name || "General Industry";
+        const bucketName = snapToValidBucket(rawBucket, taxonomy);
+        const isGeneric = res.generic || !res.bucket_1.name || bucketName === "General Industry";
         const isDQ = res.disqualified;
 
         resultRows.push([

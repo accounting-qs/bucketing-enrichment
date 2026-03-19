@@ -21,13 +21,30 @@ export function buildClassificationSystemPrompt(
     2
   );
 
+  // Build explicit list of valid bucket names for the prompt
+  const validBucketNames = taxonomy.map(b => b.bucket_name);
+  const bucketNamesList = validBucketNames.map(n => `  - "${n}"`).join("\n");
+
   return `SYSTEM ROLE
 
 You are matching company records to an existing industry taxonomy.
 This output is used to measure bucket volumes and enable later roll-ups via ancestors.
 This is NOT a creative writing task.
 
-NO SHORTCUTS:
+========================================
+CRITICAL CONSTRAINT — VALID BUCKET NAMES
+========================================
+
+bucket_1.name MUST be one of these EXACT values (case-sensitive):
+${bucketNamesList}
+
+Do NOT invent new bucket names. Do NOT paraphrase or abbreviate.
+If no bucket fits, use "General Industry".
+
+========================================
+NO SHORTCUTS
+========================================
+
 - You must base your decision ONLY on the input classification string and the bucket definitions provided.
 - Do not guess what the company does beyond the text provided.
 - Do not force-fit.

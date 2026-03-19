@@ -32,17 +32,51 @@ export async function classifyWithDuckDB(
   const conn = await instance.connect();
 
   try {
-    // 1. Create contacts table — only store idx and the selected column text
-    await conn.run(`CREATE TABLE contacts (idx INTEGER, primary_text VARCHAR)`);
+    // 1. Create contacts table — store idx, primary text, AND fallback text from other columns
+    await conn.run(`CREATE TABLE contacts (idx INTEGER, primary_text VARCHAR, fallback_text VARCHAR)`);
 
     // 2. Create scoring table — all bucket scores for all rows
     await conn.run(`CREATE TABLE scores (idx INTEGER, bucket_name VARCHAR, score DOUBLE, reason VARCHAR)`);
 
-    // 3. Insert rows — ONLY the selected column, not metadata columns
+    // 3. Insert rows — primary column + fallback from ALL other columns
     for (let i = 0; i < rows.length; i++) {
       const primaryVal = (rows[i][selectedColumn] || "").toLowerCase().trim();
+
+      // Build fallback text from all other columns (company name, title, email domain, etc.)
+      const fallbackParts: string[] = [];
+      for (const [key, val] of Object.entries(rows[i])) {
+        if (key === selectedColumn || !val || !val.trim()) continue;
+        const v = val.trim().toLowerCase();
+        // Extract email domain as words: user@goldandcoin.com → "goldandcoin"
+        if (v.includes("@") && v.includes(".")) {
+          const domain = v.split("@")[1]?.split(".")[0] || "";
+          if (domain && domain.length > 2) {
+            // Split camelCase/hyphens: "makegoodwill" → "make goodwill" isn't easy,
+            // but we can still match full domain words
+            fallbackParts.push(domain);
+          }
+        }
+        // Also add any URL domain hints: http://www.goldandcoin.com → "goldandcoin"
+        if (v.startsWith("http")) {
+          try {
+            const hostname = new URL(v).hostname.replace("www.", "");
+            const domPart = hostname.split(".")[0];
+            if (domPart && domPart.length > 2) fallbackParts.push(domPart);
+          } catch { /* skip bad URLs */ }
+        }
+        // Add other column values directly (company name, job title, etc.)
+        if (!v.includes("@") && !v.startsWith("http") && v.length > 2 && v.length < 200) {
+          fallbackParts.push(v);
+        }
+      }
+      const fallbackVal = fallbackParts.join(" ").substring(0, 500);
+      const isError = !primaryVal || primaryVal.includes("scrape error") || primaryVal === "error" || primaryVal === "n/a" || primaryVal === "null" || primaryVal.includes("site error");
+
+      // Use fallback_text if primary is empty/error
+      const effectivePrimary = isError ? fallbackVal : primaryVal;
+
       await conn.run(
-        `INSERT INTO contacts VALUES (${i}, '${escapeSql(primaryVal)}')`
+        `INSERT INTO contacts VALUES (${i}, '${escapeSql(effectivePrimary)}', '${escapeSql(fallbackVal)}')`
       );
     }
 
