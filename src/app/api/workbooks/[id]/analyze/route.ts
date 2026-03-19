@@ -35,8 +35,8 @@ function parseCSV(text: string): { headers: string[]; rows: Record<string, strin
   return { headers, rows };
 }
 
-const BATCH_SIZE = 50;
-const PARALLEL_BATCHES = 3;
+const BATCH_SIZE = 25;
+const PARALLEL_BATCHES = 2;
 
 // POST — start analysis (inline async processing without Redis)
 export async function POST(
@@ -415,7 +415,7 @@ async function processAIBatches(
 
     for (const outcome of settled) {
       if (outcome.error || !outcome.results) {
-        console.error(`Batch error at index ${outcome.batchIndex}:`, outcome.error);
+        console.error(`[AI] Batch error at index ${outcome.batchIndex}:`, outcome.error instanceof Error ? outcome.error.message : outcome.error);
         for (const item of outcome.batch) {
           const row = rows[item.index];
           resultRows.push([

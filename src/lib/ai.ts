@@ -9,14 +9,17 @@ import { buildClassificationSystemPrompt, buildBatchUserPrompt } from "./prompts
 // ============================================================
 
 function getOpenAI(): OpenAI {
+  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY not set");
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
 function getGemini(): GoogleGenerativeAI {
-  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not set");
+  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 }
 
 function getClaude(): Anthropic {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not set");
   return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 }
 
@@ -39,16 +42,42 @@ export interface BatchResult {
 }
 
 // ============================================================
+// Retry helper with timeout
+// ============================================================
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 2,
+  timeoutMs = 60000,
+  label = ""
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await Promise.race([
+        fn(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
+        ),
+      ]);
+      return result;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[AI ${label}] Attempt ${attempt + 1}/${maxRetries + 1} failed: ${errMsg}`);
+
+      if (attempt === maxRetries) throw err;
+
+      // Wait before retry: 2s, 5s
+      const delay = attempt === 0 ? 2000 : 5000;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error("Unreachable");
+}
+
+// ============================================================
 // Main classification function
 // ============================================================
 
-/**
- * Classify a batch of values using AI
- * @param batch Array of { index, value } — the original row index and the value to classify
- * @param taxonomy Full taxonomy (25+1 default + custom)
- * @param provider AI provider
- * @param model Optional specific model name
- */
 export async function classifyBatch(
   batch: { index: number; value: string }[],
   taxonomy: BucketDefinition[],
@@ -61,27 +90,42 @@ export async function classifyBatch(
   let responseText = "";
   let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
+  const label = `${provider}/${model || "default"}`;
+  console.log(`[AI ${label}] Classifying batch of ${batch.length} items...`);
+
   switch (provider) {
     case "gemini": {
-      const result = await classifyWithGemini(systemPrompt, userPrompt, model);
+      const result = await withRetry(
+        () => classifyWithGemini(systemPrompt, userPrompt, model),
+        2, 90000, label
+      );
       responseText = result.text;
       tokenUsage = result.tokenUsage;
       break;
     }
     case "openai": {
-      const result = await classifyWithOpenAI(systemPrompt, userPrompt, model);
+      const result = await withRetry(
+        () => classifyWithOpenAI(systemPrompt, userPrompt, model),
+        2, 90000, label
+      );
       responseText = result.text;
       tokenUsage = result.tokenUsage;
       break;
     }
     case "claude": {
-      const result = await classifyWithClaude(systemPrompt, userPrompt, model);
+      const result = await withRetry(
+        () => classifyWithClaude(systemPrompt, userPrompt, model),
+        2, 90000, label
+      );
       responseText = result.text;
       tokenUsage = result.tokenUsage;
       break;
     }
     case "openrouter": {
-      const result = await classifyWithOpenRouter(systemPrompt, userPrompt, model);
+      const result = await withRetry(
+        () => classifyWithOpenRouter(systemPrompt, userPrompt, model),
+        2, 120000, label // OpenRouter can be slower
+      );
       responseText = result.text;
       tokenUsage = result.tokenUsage;
       break;
@@ -89,6 +133,8 @@ export async function classifyBatch(
     default:
       throw new Error(`Unknown AI provider: ${provider}`);
   }
+
+  console.log(`[AI ${label}] Got response (${responseText.length} chars), parsing...`);
 
   // Parse the JSON response
   const results = parseClassificationResponse(responseText, batch);
@@ -109,6 +155,9 @@ async function classifyWithGemini(
   const m = gemini.getGenerativeModel({
     model: model || "gemini-2.5-flash",
     systemInstruction: systemPrompt,
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
   });
 
   const result = await m.generateContent(userPrompt);
@@ -156,17 +205,24 @@ async function classifyWithClaude(
   model?: string
 ) {
   const claude = getClaude();
+
+  // Force JSON output by adding instruction
+  const enhancedUser = `${userPrompt}\n\nIMPORTANT: Return ONLY a JSON array. No markdown, no code blocks, just the raw JSON array.`;
+
   const response = await claude.messages.create({
     model: model || "claude-sonnet-4-20250514",
-    max_tokens: 8192,
+    max_tokens: 16384,
     system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
+    messages: [{ role: "user", content: enhancedUser }],
   });
 
   const textBlock = response.content.find((b) => b.type === "text");
+  const text = textBlock && "text" in textBlock ? textBlock.text : "[]";
+
+  console.log(`[Claude] Response status: ${response.stop_reason}, model: ${response.model}, text length: ${text.length}`);
 
   return {
-    text: textBlock && "text" in textBlock ? textBlock.text : "[]",
+    text,
     tokenUsage: {
       promptTokens: response.usage?.input_tokens || 0,
       completionTokens: response.usage?.output_tokens || 0,
