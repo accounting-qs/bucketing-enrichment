@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
+  Search,
 } from "lucide-react";
 
 interface AIModel {
@@ -74,6 +75,7 @@ export default function AnalysisConfigPanel({ columns, totalRows, onRunAnalysis,
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("ai_only");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [openRouterSearch, setOpenRouterSearch] = useState("");
 
   // Fetch models on mount
   useEffect(() => {
@@ -226,13 +228,34 @@ export default function AnalysisConfigPanel({ columns, totalRows, onRunAnalysis,
 
                         {expandedProvider === provider && (
                           <div className="model-group__list">
-                            {provModels.map((m) => (
+                            {/* Search bar for OpenRouter */}
+                            {provider === "openrouter" && (
+                              <div className="model-search">
+                                <Search size={14} className="model-search__icon" />
+                                <input
+                                  type="text"
+                                  value={openRouterSearch}
+                                  onChange={(e) => setOpenRouterSearch(e.target.value)}
+                                  placeholder="Search models..."
+                                  className="model-search__input"
+                                  autoFocus
+                                />
+                              </div>
+                            )}
+                            {(provider === "openrouter" && openRouterSearch
+                              ? provModels.filter((m) => {
+                                  const q = openRouterSearch.toLowerCase();
+                                  return m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q);
+                                })
+                              : provModels
+                            ).slice(0, provider === "openrouter" ? 50 : undefined).map((m) => (
                               <button
                                 key={m.id}
                                 className={`model-item ${selectedModel?.id === m.id ? "model-item--active" : ""}`}
                                 onClick={() => {
                                   setSelectedModel(m);
                                   setShowModelPicker(false);
+                                  setOpenRouterSearch("");
                                 }}
                               >
                                 <span className="model-item__name">{m.name}</span>
@@ -250,6 +273,11 @@ export default function AnalysisConfigPanel({ columns, totalRows, onRunAnalysis,
                                 </span>
                               </button>
                             ))}
+                            {provider === "openrouter" && !openRouterSearch && provModels.length > 50 && (
+                              <div className="model-group__more">
+                                Use search to find more ({provModels.length - 50}+ models)
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

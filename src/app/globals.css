@@ -1324,6 +1324,41 @@
 .dark .model-group__header:hover { background: rgba(255,255,255,0.05); }
 .dark .estimate-panel { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.15); }
 
+/* Model search bar (OpenRouter) */
+.model-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  z-index: 1;
+}
+
+.model-search__icon { color: #94a3b8; flex-shrink: 0; }
+
+.model-search__input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.82rem;
+  color: var(--foreground);
+}
+
+.model-search__input::placeholder { color: #94a3b8; }
+
+.model-group__more {
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  font-style: italic;
+  border-top: 1px solid var(--border);
+}
+
 @media (max-width: 640px) {
   .mode-selector { grid-template-columns: repeat(2, 1fr); }
   .estimate-grid { grid-template-columns: 1fr; }

@@ -110,16 +110,25 @@ async function fetchOpenAIModels(): Promise<AIModel[]> {
     const data = await res.json();
     const chatModels: AIModel[] = [];
 
-    // Filter for chat-capable models (gpt-*)
+    // Filter for recent chat-capable models only
+    const RELEVANT_PREFIXES = [
+      "gpt-5", "gpt-4.1", "gpt-4o", "gpt-4.5",
+      "o1", "o3", "o4",
+    ];
+
     for (const m of data.data || []) {
       const id: string = m.id;
-      if (!id.startsWith("gpt-") && !id.startsWith("o")) continue;
-      // Skip fine-tuned, instruct, and embedding models
+
+      // Must start with a relevant prefix
+      const isRelevant = RELEVANT_PREFIXES.some((p) => id.startsWith(p));
+      if (!isRelevant) continue;
+
+      // Skip fine-tuned, instruct, embedding, and special models
       if (id.includes("instruct") || id.includes("embed") || id.includes("ft:")) continue;
-      // Skip realtime/audio models
       if (id.includes("realtime") || id.includes("audio") || id.includes("tts")) continue;
-      // Skip search/edit deprecated
-      if (id.includes("search") || id.includes("edit")) continue;
+      if (id.includes("search") || id.includes("edit") || id.includes("preview")) continue;
+      // Skip dated variants (keep the base model)
+      if (/-20\d{2}-\d{2}-\d{2}$/.test(id)) continue;
 
       const pricing = getOpenAIPricing(id);
 
@@ -211,6 +220,11 @@ async function fetchGeminiModels(): Promise<AIModel[]> {
       // Skip embedding, vision-only, TTS, and image models
       if (id.includes("embed") || id.includes("tts") || id.includes("imagen") || id.includes("veo")) continue;
       if (id.includes("aqa") || id.includes("bisheng")) continue;
+
+      // Only keep Gemini 2.0+ (skip 1.0, 1.5 legacy)
+      if (id.includes("gemini-1.0") || id.includes("gemini-1.5")) continue;
+      // Skip dated variants
+      if (/-\d{3,4}$/.test(id)) continue;
 
       const pricing = getGeminiPricing(id);
 
