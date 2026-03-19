@@ -4,6 +4,7 @@ import { classifyBatch } from "@/lib/ai";
 import { downloadFile } from "@/lib/storage";
 import { getFullTaxonomy, DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
 import { classifyDeterministic, applyBucketThreshold } from "@/lib/deterministicClassifier";
+import { classifyWithDuckDB, applyBucketThresholdDuckDB } from "@/lib/duckdbEngine";
 import type { BucketDefinition, AIProvider } from "@/types";
 
 // Parse CSV line (handles quoted fields)
@@ -34,7 +35,8 @@ function parseCSV(text: string): { headers: string[]; rows: Record<string, strin
   return { headers, rows };
 }
 
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 50;
+const PARALLEL_BATCHES = 3;
 
 // POST — start analysis (inline async processing without Redis)
 export async function POST(
@@ -158,12 +160,21 @@ async function processAnalysis(
       allColumns: row,
     }));
 
-    // ─── Deterministic Only ─────────────────────────────
+    // ─── Deterministic Only (DuckDB) ────────────────────
     if (analysisMode === "deterministic_only") {
-      await execute("UPDATE jobs SET message = 'Running deterministic classification...' WHERE id = $1", [jobId]);
+      await execute("UPDATE jobs SET message = 'Running DuckDB deterministic classification...' WHERE id = $1", [jobId]);
 
-      let results = classifyDeterministic(values, taxonomy);
-      results = applyBucketThreshold(results, minBucketThreshold);
+      let results;
+      try {
+        results = await classifyWithDuckDB(rows, column, taxonomy);
+        results = applyBucketThresholdDuckDB(results, minBucketThreshold);
+      } catch (duckErr) {
+        console.warn("DuckDB failed, falling back to JS classifier:", duckErr);
+        const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
+        let jsResults = classifyDeterministic(jsValues, taxonomy);
+        jsResults = applyBucketThreshold(jsResults, minBucketThreshold);
+        results = jsResults;
+      }
 
       for (const res of results) {
         const row = rows[res.index];
@@ -180,13 +191,20 @@ async function processAnalysis(
         ]);
       }
 
-      await execute("UPDATE analyses SET progress = 100, message = 'Deterministic analysis complete' WHERE id = $1", [analysisId]);
+      await execute("UPDATE analyses SET progress = 100, message = 'DuckDB deterministic analysis complete' WHERE id = $1", [analysisId]);
     }
     // ─── Deterministic → AI ─────────────────────────────
     else if (analysisMode === "deterministic_then_ai") {
-      await execute("UPDATE jobs SET message = 'Running deterministic pass...' WHERE id = $1", [jobId]);
+      await execute("UPDATE jobs SET message = 'Running DuckDB deterministic pass...' WHERE id = $1", [jobId]);
 
-      const detResults = classifyDeterministic(values, taxonomy);
+      let detResults;
+      try {
+        detResults = await classifyWithDuckDB(rows, column, taxonomy);
+      } catch (duckErr) {
+        console.warn("DuckDB failed, falling back to JS:", duckErr);
+        const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
+        detResults = classifyDeterministic(jsValues, taxonomy);
+      }
       const confident = detResults.filter((r) => r.method === "deterministic");
       const needsAI = detResults.filter((r) => r.method === "needs_ai");
 
@@ -356,7 +374,8 @@ async function processAIBatches(
   const resultRows: unknown[][] = [];
   let totalCost = 0;
 
-  for (let batchStart = 0; batchStart < values.length; batchStart += BATCH_SIZE) {
+  // Process batches in parallel groups of PARALLEL_BATCHES
+  for (let groupStart = 0; groupStart < values.length; groupStart += BATCH_SIZE * PARALLEL_BATCHES) {
     // Check for cancellation
     const jobRecord = await getOne<{ status: string }>("SELECT status FROM jobs WHERE id = $1", [jobId]);
     if (jobRecord?.status === "cancelling") {
@@ -364,29 +383,58 @@ async function processAIBatches(
       break;
     }
 
-    const batchEnd = Math.min(batchStart + BATCH_SIZE, values.length);
-    const batch = values.slice(batchStart, batchEnd);
+    // Build parallel batch promises
+    const parallelPromises: Promise<{ batchIndex: number; results?: Awaited<ReturnType<typeof classifyBatch>>; error?: unknown; batch: typeof values }>[] = [];
 
-    const progress = Math.round(((processedSoFar + batchStart) / totalRows) * 100);
+    for (let p = 0; p < PARALLEL_BATCHES; p++) {
+      const batchStart = groupStart + p * BATCH_SIZE;
+      if (batchStart >= values.length) break;
+
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, values.length);
+      const batch = values.slice(batchStart, batchEnd);
+
+      parallelPromises.push(
+        classifyBatch(batch, taxonomy, provider, model || undefined)
+          .then(result => ({ batchIndex: batchStart, results: result, batch }))
+          .catch(error => ({ batchIndex: batchStart, error, batch }))
+      );
+    }
+
+    // Update progress
+    const groupEnd = Math.min(groupStart + BATCH_SIZE * PARALLEL_BATCHES, values.length);
+    const progress = Math.round(((processedSoFar + groupStart) / totalRows) * 100);
     await execute("UPDATE analyses SET progress = $1, message = $2, total_rows_processed = $3 WHERE id = $4",
-      [progress, `Processing rows ${batchStart + 1}–${batchEnd} of ${values.length}...`, processedSoFar + batchStart, analysisId]
+      [progress, `Processing rows ${groupStart + 1}–${groupEnd} of ${values.length} (${PARALLEL_BATCHES} parallel)...`, processedSoFar + groupStart, analysisId]
     );
     await execute("UPDATE jobs SET progress = $1, message = $2 WHERE id = $3",
-      [progress, `Batch ${Math.floor(batchStart / BATCH_SIZE) + 1}/${Math.ceil(values.length / BATCH_SIZE)}`, jobId]
+      [progress, `Batch group ${Math.floor(groupStart / (BATCH_SIZE * PARALLEL_BATCHES)) + 1}/${Math.ceil(values.length / (BATCH_SIZE * PARALLEL_BATCHES))}`, jobId]
     );
 
-    try {
-      const { results, tokenUsage: batchTokens } = await classifyBatch(batch, taxonomy, provider, model || undefined);
+    // Wait for all parallel batches
+    const settled = await Promise.all(parallelPromises);
 
+    for (const outcome of settled) {
+      if (outcome.error || !outcome.results) {
+        console.error(`Batch error at index ${outcome.batchIndex}:`, outcome.error);
+        for (const item of outcome.batch) {
+          const row = rows[item.index];
+          resultRows.push([
+            analysisId, item.index, item.value, JSON.stringify(row),
+            "General Industry", "General Industry", null, null,
+            null, "Batch classification error", true, false, 0,
+          ]);
+        }
+        continue;
+      }
+
+      const { results, tokenUsage: batchTokens } = outcome.results;
       tokenUsage.promptTokens += batchTokens.promptTokens;
       tokenUsage.completionTokens += batchTokens.completionTokens;
       tokenUsage.totalTokens += batchTokens.totalTokens;
 
-      // Estimate cost per batch
-      // We'll get the approximate cost from model catalog pricing
       const batchCost = estimateBatchCost(batchTokens, provider, model);
       totalCost += batchCost;
-      const costPerRow = batch.length > 0 ? batchCost / batch.length : 0;
+      const costPerRow = outcome.batch.length > 0 ? batchCost / outcome.batch.length : 0;
 
       for (const res of results) {
         const row = rows[res.index];
@@ -401,16 +449,6 @@ async function processAIBatches(
           bucketName, bucketName, res.bucket_3.name || null, res.bucket_2.name || null,
           res.bucket_1.score || null, res.bucket_1.reason || null,
           isGeneric, isDQ, costPerRow,
-        ]);
-      }
-    } catch (batchError) {
-      console.error(`Batch error at rows ${batchStart}-${batchEnd}:`, batchError);
-      for (const item of batch) {
-        const row = rows[item.index];
-        resultRows.push([
-          analysisId, item.index, item.value, JSON.stringify(row),
-          "General Industry", "General Industry", null, null,
-          null, "Batch classification error", true, false, 0,
         ]);
       }
     }
