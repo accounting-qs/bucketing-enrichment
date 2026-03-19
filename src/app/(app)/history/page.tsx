@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { History as HistoryIcon, Download, Search, Filter } from "lucide-react";
+import { History as HistoryIcon, Download, Search } from "lucide-react";
 
 interface AnalysisRecord {
   id: string;
@@ -18,7 +18,31 @@ interface AnalysisRecord {
   ai_classified: number;
   general_bucket_count: number;
   created_at: string;
+  started_at: string | null;
   completed_at: string | null;
+}
+
+function formatTime(isoStr: string | null): string {
+  if (!isoStr) return "—";
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatElapsed(startIso: string | null, endIso: string | null): string {
+  if (!startIso) return "—";
+  const start = new Date(startIso).getTime();
+  const end = endIso ? new Date(endIso).getTime() : Date.now();
+  const diffMs = Math.max(0, end - start);
+
+  if (diffMs < 1000) return "<1s";
+  const totalSec = Math.round(diffMs / 1000);
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+
+  if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+  if (mins > 0) return `${mins}m ${secs}s`;
+  return `${secs}s`;
 }
 
 export default function HistoryPage() {
@@ -113,6 +137,9 @@ export default function HistoryPage() {
                 <th>Status</th>
                 <th>Rows</th>
                 <th>Processed</th>
+                <th>Started</th>
+                <th>Completed</th>
+                <th>Elapsed</th>
                 <th>Date</th>
                 <th>Actions</th>
               </tr>
@@ -131,6 +158,13 @@ export default function HistoryPage() {
                   </td>
                   <td>{a.total_rows?.toLocaleString()}</td>
                   <td>{a.total_rows_processed?.toLocaleString()}</td>
+                  <td className="td-time">{formatTime(a.started_at)}</td>
+                  <td className="td-time">{formatTime(a.completed_at)}</td>
+                  <td className="td-elapsed">
+                    <span className={`elapsed-badge ${a.status === "processing" ? "elapsed-badge--active" : ""}`}>
+                      {formatElapsed(a.started_at, a.completed_at)}
+                    </span>
+                  </td>
                   <td className="td-date">
                     {new Date(a.created_at).toLocaleDateString()}
                   </td>

@@ -42,22 +42,32 @@ export async function classifyWithDuckDB(
     for (let i = 0; i < rows.length; i++) {
       const primaryVal = (rows[i][selectedColumn] || "").toLowerCase().trim();
 
-      // Build fallback text from all other columns (company name, title, email domain, etc.)
+      // Build fallback text from COMPANY-SPECIFIC columns only (not metadata)
+      // Exclude: names, IDs, list names, row indices, proxy info — these don't indicate industry
+      const METADATA_COLUMNS = new Set([
+        "first_name", "last_name", "full_name", "name",
+        "lead_list_name", "list_name", "lead_list",
+        "contact_id", "id", "row_index", "row_number", "#",
+        "proxy_used", "proxy", "status", "confidence", "reason",
+        "bucket", "bucket_name", "industry", "classification_result",
+      ]);
+
       const fallbackParts: string[] = [];
       for (const [key, val] of Object.entries(rows[i])) {
         if (key === selectedColumn || !val || !val.trim()) continue;
+        if (METADATA_COLUMNS.has(key.toLowerCase().trim())) continue;
         const v = val.trim().toLowerCase();
+        // Skip very short values (likely abbreviations or IDs)
+        if (v.length <= 2) continue;
         // Extract email domain as words: user@goldandcoin.com → "goldandcoin"
         if (v.includes("@") && v.includes(".")) {
           const domain = v.split("@")[1]?.split(".")[0] || "";
           if (domain && domain.length > 2) {
-            // Split camelCase/hyphens: "makegoodwill" → "make goodwill" isn't easy,
-            // but we can still match full domain words
             fallbackParts.push(domain);
           }
         }
         // Also add any URL domain hints: http://www.goldandcoin.com → "goldandcoin"
-        if (v.startsWith("http")) {
+        else if (v.startsWith("http")) {
           try {
             const hostname = new URL(v).hostname.replace("www.", "");
             const domPart = hostname.split(".")[0];
@@ -65,7 +75,7 @@ export async function classifyWithDuckDB(
           } catch { /* skip bad URLs */ }
         }
         // Add other column values directly (company name, job title, etc.)
-        if (!v.includes("@") && !v.startsWith("http") && v.length > 2 && v.length < 200) {
+        else if (v.length < 200) {
           fallbackParts.push(v);
         }
       }
@@ -128,12 +138,36 @@ export async function classifyWithDuckDB(
       const reasonStr = escapeSql(reasonParts.slice(0, 3).join(", "));
 
       // INSERT scores for ALL rows that match this bucket (not UPDATE!)
+      // Score from BOTH primary_text AND fallback_text (fallback at 50% weight)
+      const fallbackScoreParts = scoreParts.map(sp => 
+        sp.replace(/primary_text/g, "fallback_text")
+      );
+      const fallbackScoreExpr = fallbackScoreParts.join(" + ");
+      
+      // Exclude check on primary first, then fallback
+      const fallbackExcludeConditions: string[] = [];
+      for (const term of bucket.exclude) {
+        const words = term.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+        if (words.length === 0) continue;
+        const fbCheck = words.map(w => `fallback_text LIKE '%${escapeSql(w)}%'`).join(" AND ");
+        fallbackExcludeConditions.push(`(${fbCheck})`);
+      }
+      const fallbackExcludeClause = fallbackExcludeConditions.length > 0
+        ? `AND NOT (${fallbackExcludeConditions.join(" OR ")})`
+        : "";
+
       await conn.run(`
         INSERT INTO scores
-        SELECT idx, '${escapeSql(bucket.bucket_name)}', (${scoreExpr}), 'Matched: ${reasonStr}'
+        SELECT idx, '${escapeSql(bucket.bucket_name)}',
+          GREATEST(
+            (${scoreExpr}),
+            CAST((${fallbackScoreExpr}) * 0.5 AS DOUBLE)
+          ),
+          'Matched: ${reasonStr}'
         FROM contacts
-        WHERE (${scoreExpr}) > 0
+        WHERE ((${scoreExpr}) > 0 OR (${fallbackScoreExpr}) > 0)
         ${excludeClause}
+        ${fallbackExcludeClause}
       `);
     }
 
