@@ -28,6 +28,14 @@ pool.on("error", (err) => {
 
 // Inline schema SQL — avoids fs.readFileSync in Next.js production bundles
 const SCHEMA_SQL = `
+-- Drop old incompatible tables (one-time migration from v1 → v2)
+DROP TABLE IF EXISTS analysis_rows CASCADE;
+DROP TABLE IF EXISTS analyses CASCADE;
+DROP TABLE IF EXISTS jobs CASCADE;
+DROP TABLE IF EXISTS workbooks CASCADE;
+DROP TABLE IF EXISTS custom_buckets CASCADE;
+DROP TABLE IF EXISTS projects CASCADE;
+
 CREATE TABLE IF NOT EXISTS projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
