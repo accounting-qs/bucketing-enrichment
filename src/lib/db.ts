@@ -125,6 +125,25 @@ CREATE INDEX IF NOT EXISTS idx_analysis_rows_bucket ON analysis_rows(analysis_id
 CREATE INDEX IF NOT EXISTS idx_analysis_rows_industry ON analysis_rows(analysis_id, industry);
 CREATE INDEX IF NOT EXISTS idx_jobs_analysis ON jobs(analysis_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+-- Migrations: add new columns to existing tables (safe to run multiple times)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='analysis_mode') THEN
+    ALTER TABLE analyses ADD COLUMN analysis_mode TEXT NOT NULL DEFAULT 'ai_only';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='row_limit') THEN
+    ALTER TABLE analyses ADD COLUMN row_limit INTEGER;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='min_bucket_threshold') THEN
+    ALTER TABLE analyses ADD COLUMN min_bucket_threshold INTEGER NOT NULL DEFAULT 5;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='estimated_cost') THEN
+    ALTER TABLE analyses ADD COLUMN estimated_cost NUMERIC(10,6) DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analysis_rows' AND column_name='cost_usd') THEN
+    ALTER TABLE analysis_rows ADD COLUMN cost_usd NUMERIC(10,8) DEFAULT 0;
+  END IF;
+END $$;
 `;
 
 let migrationDone = false;

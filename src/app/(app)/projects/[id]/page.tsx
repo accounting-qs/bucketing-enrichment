@@ -167,10 +167,13 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
   const handleRunAnalysis = async (config: AnalysisConfig) => {
     if (!selectedWorkbook) return;
 
     setAnalyzing(true);
+    setAnalysisError(null);
     try {
       const res = await fetch(`/api/workbooks/${selectedWorkbook.id}/analyze`, {
         method: "POST",
@@ -189,9 +192,12 @@ export default function ProjectDetailPage() {
       if (res.ok) {
         await fetchAnalyses();
         setExpandedSteps((s) => ({ ...s, 3: true }));
+      } else {
+        const errData = await res.json().catch(() => ({ error: "Unknown error" }));
+        setAnalysisError(errData.error || `Server error (${res.status})`);
       }
     } catch (err) {
-      console.error("Analysis start failed:", err);
+      setAnalysisError(`Network error: ${String(err)}`);
     } finally {
       setAnalyzing(false);
     }
@@ -332,12 +338,25 @@ export default function ProjectDetailPage() {
                 <p>Upload a file first to configure analysis</p>
               </div>
             ) : (
-              <AnalysisConfigPanel
-                columns={selectedWorkbook.columns}
-                totalRows={selectedWorkbook.row_count}
-                onRunAnalysis={handleRunAnalysis}
-                disabled={analyzing || !!activeAnalysis}
-              />
+              <>
+                <AnalysisConfigPanel
+                  columns={selectedWorkbook.columns}
+                  totalRows={selectedWorkbook.row_count}
+                  onRunAnalysis={handleRunAnalysis}
+                  disabled={analyzing || !!activeAnalysis}
+                />
+                {analysisError && (
+                  <div style={{
+                    marginTop: 12, padding: "12px 16px",
+                    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+                    borderRadius: 8, color: "#ef4444", fontSize: "0.85rem",
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    <XCircle size={16} />
+                    <span><strong>Error:</strong> {analysisError}</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
