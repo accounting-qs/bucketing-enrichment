@@ -20,7 +20,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Advisory firms providing financial planning and investment management to individuals and families.",
     direct_ancestor: "Financial Services & Investment",
     root_category: "Financial Services",
-    include: ["wealth management", "financial planning", "financial advisory", "family office", "retirement planning", "investment advisory for individuals"],
+    include: ["wealth management", "financial planning", "financial advisory", "family office", "retirement planning", "investment advisory", "asset management", "financial advisor", "fee-based", "fee-only", "fiduciary", "investment counsel"],
     exclude: ["investment banking", "corporate finance", "fintech", "institutional asset management"],
     example_strings: ["Wealth management and financial planning for individuals", "Boutique wealth management firm", "Fee-only fiduciary financial planning", "Retirement planning and investment advisory"]
   },
@@ -29,7 +29,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Companies involved in the B2B production of physical goods, industrial equipment, or materials.",
     direct_ancestor: "Industrial & Operations",
     root_category: "Industrial",
-    include: ["manufacturing", "manufacturer", "industrial production", "fabrication", "machining", "OEM"],
+    include: ["manufacturing", "manufacturer", "industrial production", "fabrication", "machining", "OEM", "industrial automation", "industrial services", "industrial equipment", "carbon capture", "electrochemical", "chemical processing"],
     exclude: ["software for manufacturing", "consulting for manufacturing", "consumer handmade goods"],
     example_strings: ["Custom metal fabrication and manufacturing", "Industrial equipment manufacturer", "Precision machining and manufacturing services", "Electronics manufacturing services"]
   },
@@ -38,7 +38,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Organizations operating for public benefit, advocacy, or industry representation rather than profit.",
     direct_ancestor: "Non-Profit & Public Sector",
     root_category: "Non-Profit",
-    include: ["non-profit", "not-for-profit", "foundation", "association", "advocacy organization", "charity"],
+    include: ["non-profit", "not-for-profit", "foundation", "association", "advocacy organization", "charity", "nonprofit", "community land trust", "social enterprise", "community development", "youth development", "charitable", "501c"],
     exclude: ["for-profit social enterprise", "commercial business"],
     example_strings: ["Nonprofit broadband advocacy organization", "Industry trade association", "Charitable foundation for education", "Global non-profit organization"]
   },
@@ -65,7 +65,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Firms that invest capital into private companies, often for buyouts, growth equity, or operational control.",
     direct_ancestor: "Financial Services & Investment",
     root_category: "Financial Services",
-    include: ["private equity", "growth equity", "investment firm", "investment holding", "buyout firm", "capital partners"],
+    include: ["private equity", "growth equity", "investment firm", "investment holding", "buyout firm", "capital partners", "mergers and acquisitions", "M&A", "secondary market", "portfolio company", "investment management"],
     exclude: ["venture capital", "wealth management", "real estate investment"],
     example_strings: ["Private equity firm specializing in lower middle market", "Investment firm focused on healthcare", "Growth equity investment partner", "Private investment firm"]
   },
@@ -74,7 +74,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Professional practices providing legal counsel and litigation services to businesses and individuals.",
     direct_ancestor: "Professional Services",
     root_category: "Business Services",
-    include: ["law firm", "legal services", "attorney", "counsel", "litigation"],
+    include: ["law firm", "legal services", "attorney", "counsel", "litigation", "lawyer", "legal counsel", "legal advisory"],
     exclude: ["legaltech", "court reporting"],
     example_strings: ["Full-service law firm", "Boutique litigation firm", "Corporate and business law services", "Intellectual property law firm"]
   },
@@ -119,7 +119,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Providers of IT infrastructure management, cybersecurity, and technology strategy.",
     direct_ancestor: "Technology & Software",
     root_category: "Business Services",
-    include: ["it consulting", "managed services", "msp", "cybersecurity services", "technology consulting", "systems integration"],
+    include: ["it consulting", "managed services", "msp", "cybersecurity services", "technology consulting", "systems integration", "cybersecurity", "information security", "network security", "ICS security", "industrial cybersecurity"],
     exclude: ["saas product", "digital marketing"],
     example_strings: ["Managed IT services and cybersecurity", "IT consulting for small businesses", "Technology solutions provider", "Network security and IT support"]
   },
@@ -146,7 +146,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Professional firms providing financial record-keeping, auditing, and tax preparation services.",
     direct_ancestor: "Professional Services",
     root_category: "Business Services",
-    include: ["accounting firm", "cpa", "tax services", "audit firm", "bookkeeping"],
+    include: ["accounting firm", "cpa", "tax services", "audit firm", "bookkeeping", "accounting", "tax preparation", "auditing", "certified public accountant", "tax advisory", "financial accounting"],
     exclude: ["accounting software", "wealth management"],
     example_strings: ["Certified public accounting firm", "Tax and business advisory services", "Audit and assurance services", "Full-service accounting firm"]
   },
@@ -182,8 +182,8 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Software platforms serving the financial industry or providing financial tools.",
     direct_ancestor: "Technology & Software",
     root_category: "SaaS / Software",
-    include: ["fintech saas", "financial software", "banking platform", "payment processing", "financial technology"],
-    exclude: ["investment firm", "wealth management"],
+    include: ["fintech saas", "financial software", "banking platform", "payment processing", "financial technology", "bank", "banking", "credit union", "lending", "community bank", "commercial bank", "mortgage"],
+    exclude: ["investment firm", "wealth management", "real estate investment"],
     example_strings: ["Fintech SaaS platform for payments", "Financial data management software", "Banking technology solutions", "Investment management software"]
   },
   {

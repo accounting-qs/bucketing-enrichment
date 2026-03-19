@@ -1,11 +1,11 @@
 /**
- * Deterministic Classifier — Pure JS keyword matching engine
+ * Deterministic Classifier — Word-level keyword matching engine
  *
- * Uses the taxonomy's include/exclude terms to classify values
- * without any AI API calls. Instant and free.
+ * Uses tokenized word matching instead of substring matching.
+ * "wealth management" → checks that BOTH "wealth" AND "management" appear in text.
+ * This handles cases like "Wealth and Asset Management" correctly.
  *
- * Now examines ALL columns in a row for maximum signal,
- * not just the selected column.
+ * Examines ALL columns in a row for maximum signal.
  */
 
 import type { BucketDefinition } from "@/types";
@@ -20,8 +20,24 @@ export interface DeterministicResult {
 }
 
 /**
- * Classify a batch of rows deterministically using keyword matching.
- * Each item contains the full row data for multi-column matching.
+ * Check if ALL words from a keyword phrase appear in the text.
+ * More flexible than includes() — handles "wealth AND asset management".
+ */
+function allWordsPresent(text: string, keyword: string): boolean {
+  const words = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  return words.length > 0 && words.every(w => text.includes(w));
+}
+
+/**
+ * Check if the exact phrase appears (substring match).
+ * Gives a higher score bonus when true.
+ */
+function exactPhrasePresent(text: string, keyword: string): boolean {
+  return text.includes(keyword.toLowerCase());
+}
+
+/**
+ * Classify a batch of rows deterministically using word-level keyword matching.
  */
 export function classifyDeterministic(
   batch: { index: number; value: string; allColumns?: Record<string, string> }[],
@@ -38,22 +54,20 @@ function classifyOne(
 ): DeterministicResult {
   const primaryLower = primaryValue.toLowerCase().trim();
 
-  if (!primaryLower) {
+  if (!primaryLower || primaryLower === "scrape error" || primaryLower === "error" || primaryLower === "n/a") {
     return {
       index,
       value: primaryValue,
       bucket: "General Industry",
       confidence: 0,
       method: "needs_ai",
-      reason: "Empty value",
+      reason: "Empty or error value",
     };
   }
 
-  // Build a combined search string from ALL columns for broader matching
-  const allValuesArr = Object.values(allColumns).filter(Boolean);
-  const combinedLower = allValuesArr.map((v) => v.toLowerCase().trim()).join(" | ");
-  // Primary value gets priority; combined gives additional signals
-  const searchStrings = [primaryLower, combinedLower].filter(Boolean);
+  // Build search strings: primary column + all other columns
+  const allVals = Object.values(allColumns).filter(Boolean).map(v => v.toLowerCase().trim());
+  const combinedLower = allVals.join(" ");
 
   const scores: { bucket: BucketDefinition; score: number; matchedTerms: string[] }[] = [];
 
@@ -64,45 +78,66 @@ function classifyOne(
     const matchedTerms: string[] = [];
     let excluded = false;
 
-    // Check exclude terms on primary value
+    // Check exclude terms
     for (const term of bucket.exclude) {
-      if (primaryLower.includes(term.toLowerCase())) {
+      if (allWordsPresent(primaryLower, term)) {
         excluded = true;
         break;
       }
     }
-
     if (excluded) continue;
 
-    // Score include terms — check primary first (higher weight), then all columns
+    // Score include terms with word-level matching
     for (const term of bucket.include) {
       const termLower = term.toLowerCase();
 
-      // Primary value match (higher weight)
-      if (primaryLower.includes(termLower)) {
-        const wordCount = Math.max(1, termLower.split(" ").length);
-        const exactBonus = primaryLower === termLower ? 5 : 0;
-        score += wordCount * 2 + exactBonus; // Double weight for primary column
-        matchedTerms.push(term);
+      // Primary value — exact phrase match (highest weight)
+      if (exactPhrasePresent(primaryLower, termLower)) {
+        const wordCount = Math.max(1, termLower.split(/\s+/).length);
+        score += wordCount * 4; // Exact phrase = 4x per word
+        matchedTerms.push(`✓ "${term}"`);
       }
-      // Secondary match in other columns (lower weight)
-      else if (combinedLower.includes(termLower)) {
-        const wordCount = Math.max(1, termLower.split(" ").length);
-        score += wordCount; // Single weight for secondary columns
-        matchedTerms.push(`~${term}`);
+      // Primary value — all words present (high weight)
+      else if (allWordsPresent(primaryLower, termLower)) {
+        const wordCount = Math.max(1, termLower.split(/\s+/).length);
+        score += wordCount * 3; // All words = 3x per word
+        matchedTerms.push(`≈ "${term}"`);
+      }
+      // Combined columns — exact phrase (medium weight)
+      else if (exactPhrasePresent(combinedLower, termLower)) {
+        const wordCount = Math.max(1, termLower.split(/\s+/).length);
+        score += wordCount * 2; // Secondary exact = 2x
+        matchedTerms.push(`~"${term}"`);
+      }
+      // Combined columns — all words present (lower weight)
+      else if (allWordsPresent(combinedLower, termLower)) {
+        const wordCount = Math.max(1, termLower.split(/\s+/).length);
+        score += wordCount; // Secondary words = 1x
+        matchedTerms.push(`~≈"${term}"`);
       }
     }
 
-    // Check example_strings
+    // Check example_strings for similarity
     for (const example of bucket.example_strings) {
       const exLower = example.toLowerCase();
-      
-      if (primaryLower.includes(exLower) || exLower.includes(primaryLower)) {
-        score += 4; // Strong match
-        matchedTerms.push(`≈${example.substring(0, 30)}`);
-      } else if (combinedLower.includes(exLower) || exLower.includes(combinedLower.substring(0, 80))) {
-        score += 1;
-        matchedTerms.push(`~≈${example.substring(0, 25)}`);
+
+      // Check if most words from example are in primary
+      const exWords = exLower.split(/\s+/).filter(w => w.length > 2);
+      const matchCount = exWords.filter(w => primaryLower.includes(w)).length;
+      const matchRatio = exWords.length > 0 ? matchCount / exWords.length : 0;
+
+      if (matchRatio >= 0.6) {
+        score += Math.round(matchRatio * 4);
+        matchedTerms.push(`ex:"${example.substring(0, 25)}…"`);
+      }
+    }
+
+    // Single important word matches (catch individual words like "accounting", "bank", "manufacturing")
+    const singleWordTerms = bucket.include.filter(t => !t.includes(" "));
+    for (const term of singleWordTerms) {
+      // Already scored above, but check if primary starts with or prominently features the word
+      if (primaryLower.startsWith(term.toLowerCase()) || primaryLower.includes(` ${term.toLowerCase()} `)) {
+        score += 1; // Small bonus for prominent single-word match
       }
     }
 
@@ -126,38 +161,39 @@ function classifyOne(
   }
 
   const top = scores[0];
-  const maxPossibleScore = top.bucket.include.length * 4 + top.bucket.example_strings.length * 4;
-  const normalizedConfidence = Math.min(1, top.score / Math.max(maxPossibleScore, 6));
+  // Normalize confidence: each include term can contribute up to 4 points per word
+  const maxPossible = top.bucket.include.reduce((sum, t) => sum + Math.max(1, t.split(/\s+/).length) * 4, 0) + top.bucket.example_strings.length * 4;
+  const normalizedConfidence = Math.min(1, top.score / Math.max(maxPossible, 8));
 
-  // Check for conflict: if second-best score is within 15% of top
+  // Check for ambiguity: if second-best score is within 20% of top
   if (scores.length >= 2) {
     const second = scores[1];
     const ratio = second.score / top.score;
-    if (ratio >= 0.85) {
+    if (ratio >= 0.8) {
       return {
         index,
         value: primaryValue,
         bucket: top.bucket.bucket_name,
         confidence: normalizedConfidence * 0.5,
         method: "needs_ai",
-        reason: `Ambiguous: "${top.bucket.bucket_name}" vs "${second.bucket.bucket_name}"`,
+        reason: `Ambiguous: "${top.bucket.bucket_name}" (${top.score}) vs "${second.bucket.bucket_name}" (${second.score})`,
       };
     }
   }
 
-  // Confident classification — lowered threshold from 0.4 to 0.2 for broader acceptance
-  if (normalizedConfidence >= 0.2) {
+  // Score >= 3 means at least one meaningful keyword matched
+  if (top.score >= 3) {
     return {
       index,
       value: primaryValue,
       bucket: top.bucket.bucket_name,
-      confidence: normalizedConfidence,
+      confidence: Math.max(normalizedConfidence, 0.3),
       method: "deterministic",
-      reason: `Matched: ${top.matchedTerms.slice(0, 4).join(", ")}`,
+      reason: `Matched: ${top.matchedTerms.slice(0, 3).join(", ")}`,
     };
   }
 
-  // Low confidence — needs AI review
+  // Low score — needs AI review
   return {
     index,
     value: primaryValue,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -480,6 +480,11 @@ interface AnalysisRow {
   cost_usd: number;
 }
 
+function parseAllColumns(raw: string | Record<string, string>): Record<string, string> {
+  if (typeof raw === "object" && raw !== null) return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
 function AnalysisDetails({
   analysis,
   sorted,
@@ -496,7 +501,7 @@ function AnalysisDetails({
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalRowCount, setTotalRowCount] = useState(0);
-  const [bucketFilter, setBucketFilter] = useState("all");
+  const [activeBucket, setActiveBucket] = useState("all");
   const [showTable, setShowTable] = useState(false);
 
   const dist = analysis.bucket_distribution || {};
@@ -528,8 +533,20 @@ function AnalysisDetails({
   }, [analysis.id]);
 
   useEffect(() => {
-    if (showTable) fetchRows(1, bucketFilter);
-  }, [showTable, bucketFilter, fetchRows]);
+    if (showTable) fetchRows(1, activeBucket);
+  }, [showTable, activeBucket, fetchRows]);
+
+  // Extract CSV column names from first row's all_columns
+  const csvColumns = useMemo(() => {
+    if (rows.length === 0) return [];
+    const parsed = parseAllColumns(rows[0].all_columns);
+    return Object.keys(parsed);
+  }, [rows]);
+
+  const handleBucketClick = (bucket: string) => {
+    setActiveBucket(bucket);
+    setPage(1);
+  };
 
   return (
     <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
@@ -555,26 +572,8 @@ function AnalysisDetails({
         </div>
       </div>
 
-      {/* Bucket distribution */}
-      <h4 style={{ fontSize: "0.82rem", fontWeight: 600, marginBottom: 8 }}>Bucket Distribution</h4>
-      <div className="bucket-list">
-        {sorted.map(([bucket, count]) => (
-          <div key={bucket} className="bucket-bar">
-            <div className="bucket-bar__header">
-              <span className="bucket-bar__name">{bucket}</span>
-              <span className="bucket-bar__count">
-                {count} ({totalProcessed > 0 ? Math.round((count / totalProcessed) * 100) : 0}%)
-              </span>
-            </div>
-            <div className="bucket-bar__track">
-              <div className="bucket-bar__fill" style={{ width: `${(count / maxCount) * 100}%` }} />
-            </div>
-          </div>
-        ))}
-      </div>
-
       {/* Actions */}
-      <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
         <a href={`/api/analyses/${analysis.id}/export`} className="btn btn--ghost" style={{ fontSize: "0.82rem" }}>
           <Download size={14} /> Export CSV
         </a>
@@ -587,89 +586,117 @@ function AnalysisDetails({
         </button>
       </div>
 
-      {/* Data Table */}
+      {/* Split-pane: Bucket Tree + Data Table */}
       {showTable && (
-        <div style={{ marginTop: 16 }}>
-          {/* Filter row */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <select
-              value={bucketFilter}
-              onChange={(e) => setBucketFilter(e.target.value)}
-              className="form-input"
-              style={{ maxWidth: 250, fontSize: "0.78rem" }}
+        <div className="analysis-explorer">
+          {/* Left: Bucket tree sidebar */}
+          <div className="bucket-tree">
+            <button
+              className={`bucket-tree__item ${activeBucket === "all" ? "bucket-tree__item--active" : ""}`}
+              onClick={() => handleBucketClick("all")}
             >
-              <option value="all">All Buckets ({totalRowCount})</option>
-              {Object.entries(dist).sort(([, a], [, b]) => (b as number) - (a as number)).map(([b, c]) => (
-                <option key={b} value={b}>{b} ({c as number})</option>
-              ))}
-            </select>
-            <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
-              Page {page}/{totalPages} · {totalRowCount} rows
-            </span>
+              <span className="bucket-tree__icon">📂</span>
+              <span className="bucket-tree__name">All</span>
+              <span className="bucket-tree__count">{totalProcessed}</span>
+            </button>
+            {sorted.map(([bucket, count]) => (
+              <button
+                key={bucket}
+                className={`bucket-tree__item ${activeBucket === bucket ? "bucket-tree__item--active" : ""} ${bucket === "General Industry" ? "bucket-tree__item--general" : ""}`}
+                onClick={() => handleBucketClick(bucket)}
+              >
+                <span className="bucket-tree__icon">{bucket === "General Industry" ? "📁" : "📄"}</span>
+                <span className="bucket-tree__name">{bucket}</span>
+                <span className="bucket-tree__count">{count}</span>
+              </button>
+            ))}
           </div>
 
-          {loadingRows ? (
-            <div className="loading-state" style={{ padding: 24 }}>Loading rows...</div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Original Value</th>
-                    <th>Bucket</th>
-                    <th>Confidence</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.row_index + 1}</td>
-                      <td style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {row.original_value}
-                      </td>
-                      <td>
-                        <span className={`bucket-tag ${row.bucket_name === "General Industry" ? "bucket-tag--general" : ""}`}>
-                          {row.bucket_name}
-                        </span>
-                      </td>
-                      <td>
-                        {row.confidence != null ? (
-                          <span className={`confidence-badge ${row.confidence >= 0.7 ? "confidence--high" : row.confidence >= 0.4 ? "confidence--mid" : "confidence--low"}`}>
-                            {Math.round(row.confidence * 100)}%
-                          </span>
-                        ) : "—"}
-                      </td>
-                      <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", color: "#94a3b8" }}>
-                        {row.reason || "—"}
-                      </td>
-                    </tr>
-                  ))}
-                  {rows.length === 0 && (
-                    <tr><td colSpan={5} style={{ textAlign: "center", padding: 24, color: "#94a3b8" }}>No rows found</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button className="btn btn--ghost btn--sm" disabled={page <= 1} onClick={() => fetchRows(page - 1, bucketFilter)}>
-                ← Prev
-              </button>
-              <span style={{ fontSize: "0.78rem", lineHeight: "32px", color: "#94a3b8" }}>
-                {page} / {totalPages}
+          {/* Right: Data table */}
+          <div className="analysis-table-wrap">
+            {/* Header */}
+            <div className="analysis-table-header">
+              <span style={{ fontWeight: 600, fontSize: "0.82rem" }}>
+                {activeBucket === "all" ? "All Buckets" : activeBucket}
               </span>
-              <button className="btn btn--ghost btn--sm" disabled={page >= totalPages} onClick={() => fetchRows(page + 1, bucketFilter)}>
-                Next →
-              </button>
+              <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
+                Page {page}/{totalPages} · {totalRowCount} rows
+              </span>
             </div>
-          )}
+
+            {loadingRows ? (
+              <div className="loading-state" style={{ padding: 32 }}>Loading rows...</div>
+            ) : (
+              <div style={{ overflowX: "auto", maxHeight: 500, overflowY: "auto" }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)" }}>#</th>
+                      {csvColumns.map((col: string) => (
+                        <th key={col}>{col}</th>
+                      ))}
+                      <th>Bucket</th>
+                      <th>Confidence</th>
+                      <th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => {
+                      const parsed = parseAllColumns(row.all_columns);
+                      return (
+                        <tr key={row.id}>
+                          <td style={{ position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", fontVariantNumeric: "tabular-nums" }}>
+                            {row.row_index + 1}
+                          </td>
+                          {csvColumns.map((col: string) => (
+                            <td key={col} style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {parsed[col] || ""}
+                            </td>
+                          ))}
+                          <td>
+                            <span className={`bucket-tag ${row.bucket_name === "General Industry" ? "bucket-tag--general" : ""}`}>
+                              {row.bucket_name}
+                            </span>
+                          </td>
+                          <td>
+                            {row.confidence != null ? (
+                              <span className={`confidence-badge ${row.confidence >= 0.7 ? "confidence--high" : row.confidence >= 0.4 ? "confidence--mid" : "confidence--low"}`}>
+                                {Math.round(row.confidence * 100)}%
+                              </span>
+                            ) : "—"}
+                          </td>
+                          <td style={{ maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", color: "#94a3b8" }}>
+                            {row.reason || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {rows.length === 0 && (
+                      <tr><td colSpan={csvColumns.length + 4} style={{ textAlign: "center", padding: 32, color: "#94a3b8" }}>No rows found</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "8px 0" }}>
+                <button className="btn btn--ghost btn--sm" disabled={page <= 1} onClick={() => fetchRows(page - 1, activeBucket)}>
+                  ← Prev
+                </button>
+                <span style={{ fontSize: "0.78rem", lineHeight: "32px", color: "#94a3b8" }}>
+                  {page} / {totalPages}
+                </span>
+                <button className="btn btn--ghost btn--sm" disabled={page >= totalPages} onClick={() => fetchRows(page + 1, activeBucket)}>
+                  Next →
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
   );
 }
+
