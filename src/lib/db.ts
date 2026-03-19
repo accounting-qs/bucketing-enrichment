@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS analyses (
   status TEXT NOT NULL DEFAULT 'pending',
   progress INTEGER NOT NULL DEFAULT 0,
   message TEXT,
+  analysis_mode TEXT NOT NULL DEFAULT 'ai_only',
+  row_limit INTEGER,
+  min_bucket_threshold INTEGER NOT NULL DEFAULT 5,
+  estimated_cost NUMERIC(10,6) DEFAULT 0,
   total_rows INTEGER DEFAULT 0,
   total_rows_processed INTEGER DEFAULT 0,
   exact_matches INTEGER DEFAULT 0,
@@ -99,7 +103,8 @@ CREATE TABLE IF NOT EXISTS analysis_rows (
   confidence REAL,
   reason TEXT,
   is_generic BOOLEAN NOT NULL DEFAULT FALSE,
-  is_disqualified BOOLEAN NOT NULL DEFAULT FALSE
+  is_disqualified BOOLEAN NOT NULL DEFAULT FALSE,
+  cost_usd NUMERIC(10,8) DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS jobs (

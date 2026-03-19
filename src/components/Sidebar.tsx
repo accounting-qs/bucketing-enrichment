@@ -11,7 +11,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
+import { useTheme } from "./ThemeProvider";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -23,11 +27,15 @@ const NAV_ITEMS = [
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
+  const { theme, cycleTheme } = useTheme();
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
     return pathname.startsWith(href);
   };
+
+  const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
+  const themeLabel = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
 
   return (
     <aside
@@ -69,6 +77,17 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Theme Toggle */}
+      <button
+        onClick={cycleTheme}
+        className="sidebar__theme-toggle"
+        aria-label={`Theme: ${themeLabel}`}
+        title={`Theme: ${themeLabel}. Click to cycle.`}
+      >
+        <ThemeIcon size={16} />
+        {!collapsed && <span className="sidebar__theme-label">{themeLabel}</span>}
+      </button>
 
       {/* Collapse Toggle */}
       <button

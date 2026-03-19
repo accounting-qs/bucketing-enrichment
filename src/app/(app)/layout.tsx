@@ -1,4 +1,5 @@
 import Sidebar from "@/components/Sidebar";
+import ThemeProvider from "@/components/ThemeProvider";
 
 export default function AppLayout({
   children,
@@ -6,11 +7,13 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="app-shell">
-      <Sidebar />
-      <main className="app-main">
-        {children}
-      </main>
-    </div>
+    <ThemeProvider>
+      <div className="app-shell">
+        <Sidebar />
+        <main className="app-main">
+          {children}
+        </main>
+      </div>
+    </ThemeProvider>
   );
 }

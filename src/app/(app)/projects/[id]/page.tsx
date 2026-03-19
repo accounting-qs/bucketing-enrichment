@@ -1,24 +1,25 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import {
-  Upload,
-  FileSpreadsheet,
-  Play,
-  Download,
-  ChevronRight,
-  Loader2,
-  CheckCircle2,
-  XCircle,
   ArrowLeft,
-  Pencil,
+  Upload,
+  FileText,
+  CheckCircle2,
+  Loader2,
   Trash2,
-  FolderTree,
+  ChevronDown,
+  ChevronUp,
   BarChart3,
+  Download,
+  Clock,
+  Sparkles,
+  XCircle,
 } from "lucide-react";
+import AnalysisConfigPanel, { type AnalysisConfig } from "@/components/AnalysisConfigPanel";
 
+// ── Types ───────────────────────────────────────────────
 interface Project {
   id: string;
   name: string;
@@ -29,7 +30,6 @@ interface Project {
 interface Workbook {
   id: string;
   filename: string;
-  display_name: string | null;
   columns: string[];
   row_count: number;
   file_size_bytes: number;
@@ -38,422 +38,461 @@ interface Workbook {
 
 interface Analysis {
   id: string;
-  workbook_id: string;
   selected_column: string;
   ai_provider: string;
+  ai_model: string | null;
+  analysis_mode: string;
   status: string;
   progress: number;
   message: string | null;
   total_rows: number;
   total_rows_processed: number;
+  exact_matches: number;
+  ai_classified: number;
+  general_bucket_count: number;
+  estimated_cost: number;
   bucket_distribution: Record<string, number>;
   created_at: string;
   completed_at: string | null;
 }
 
-type Tab = "files" | "analyses" | "results";
-
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const [tab, setTab] = useState<Tab>("files");
+  const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── State ─────────────────────────────────────────────
   const [project, setProject] = useState<Project | null>(null);
   const [workbooks, setWorkbooks] = useState<Workbook[]>([]);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [selectedWorkbook, setSelectedWorkbook] = useState<string | null>(null);
-  const [selectedColumn, setSelectedColumn] = useState("");
-  const [aiProvider, setAiProvider] = useState("gemini");
-  const [analyzing, setAnalyzing] = useState(false);
-  const [activeAnalysis, setActiveAnalysis] = useState<Analysis | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchProject = useCallback(() => {
-    Promise.all([
-      fetch(`/api/projects/${id}`).then((r) => r.json()),
-      fetch(`/api/projects/${id}/workbooks`).then((r) => r.json()),
-      fetch(`/api/projects/${id}/analyses`).then((r) => r.json()),
-    ])
-      .then(([proj, wbs, ans]) => {
-        setProject(proj.project || proj);
-        setWorkbooks(wbs.workbooks || []);
-        setAnalyses(ans.analyses || []);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const [analyzing, setAnalyzing] = useState(false);
+  const [selectedWorkbook, setSelectedWorkbook] = useState<Workbook | null>(null);
+
+  const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({
+    1: true, 2: false, 3: false,
+  });
+  const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
+
+  // ── Data Fetching ─────────────────────────────────────
+  const fetchProject = useCallback(async () => {
+    const res = await fetch(`/api/projects/${id}`);
+    if (res.ok) setProject(await res.json());
+  }, [id]);
+
+  const fetchWorkbooks = useCallback(async () => {
+    const res = await fetch(`/api/projects/${id}/workbooks`);
+    if (res.ok) {
+      const data = await res.json();
+      const wbs = (data || []).map((w: Workbook & { columns: string | string[] }) => ({
+        ...w,
+        columns: typeof w.columns === "string" ? JSON.parse(w.columns) : w.columns,
+      }));
+      setWorkbooks(wbs);
+      if (wbs.length > 0 && !selectedWorkbook) {
+        setSelectedWorkbook(wbs[0]);
+        setExpandedSteps((s) => ({ ...s, 2: true }));
+      }
+    }
+  }, [id, selectedWorkbook]);
+
+  const fetchAnalyses = useCallback(async () => {
+    const res = await fetch(`/api/projects/${id}/analyses`);
+    if (res.ok) {
+      const data = await res.json();
+      const parsed = (data || []).map((a: Analysis & { bucket_distribution: string | Record<string, number> }) => ({
+        ...a,
+        bucket_distribution: typeof a.bucket_distribution === "string"
+          ? JSON.parse(a.bucket_distribution)
+          : a.bucket_distribution,
+      }));
+      setAnalyses(parsed);
+      if (parsed.length > 0) setExpandedSteps((s) => ({ ...s, 3: true }));
+    }
   }, [id]);
 
   useEffect(() => {
-    fetchProject();
-  }, [fetchProject]);
+    Promise.all([fetchProject(), fetchWorkbooks(), fetchAnalyses()])
+      .finally(() => setLoading(false));
+  }, [fetchProject, fetchWorkbooks, fetchAnalyses]);
 
-  // Poll for active analysis progress
+  // Poll for active analyses
   useEffect(() => {
-    if (activeAnalysis && ["pending", "processing"].includes(activeAnalysis.status)) {
-      pollRef.current = setInterval(async () => {
-        const res = await fetch(`/api/analyses/${activeAnalysis.id}`);
-        const data = await res.json();
-        if (data.analysis) {
-          setActiveAnalysis(data.analysis);
-          if (["completed", "failed", "completed_partial"].includes(data.analysis.status)) {
-            if (pollRef.current) clearInterval(pollRef.current);
-            fetchProject();
-          }
-        }
-      }, 2000);
-    }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [activeAnalysis?.id, activeAnalysis?.status, fetchProject]);
+    const active = analyses.some((a) => a.status === "processing" || a.status === "pending");
+    if (!active) return;
+    const interval = setInterval(fetchAnalyses, 3000);
+    return () => clearInterval(interval);
+  }, [analyses, fetchAnalyses]);
 
+  // ── Handlers ──────────────────────────────────────────
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     setUploading(true);
+    setUploadProgress(10);
+    setExpandedSteps((s) => ({ ...s, 1: true }));
+
     const formData = new FormData();
     formData.append("file", file);
     formData.append("projectId", id);
+
     try {
-      const res = await fetch("/api/workbooks/upload", {
-        method: "POST",
-        body: formData,
-      });
+      setUploadProgress(40);
+      const res = await fetch("/api/workbooks/upload", { method: "POST", body: formData });
+      setUploadProgress(90);
+
       if (res.ok) {
-        fetchProject();
+        await fetchWorkbooks();
+        setUploadProgress(100);
+        setExpandedSteps((s) => ({ ...s, 2: true }));
+      } else {
+        console.error("Upload error:", await res.text());
       }
+    } catch (err) {
+      console.error("Upload failed:", err);
     } finally {
       setUploading(false);
+      setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
-  const handleAnalyze = async () => {
-    if (!selectedWorkbook || !selectedColumn) return;
+  const handleRunAnalysis = async (config: AnalysisConfig) => {
+    if (!selectedWorkbook) return;
+
     setAnalyzing(true);
     try {
-      const res = await fetch(`/api/workbooks/${selectedWorkbook}/analyze`, {
+      const res = await fetch(`/api/workbooks/${selectedWorkbook.id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          column: selectedColumn,
-          provider: aiProvider,
+          column: config.column,
+          provider: config.model?.provider || "deterministic",
+          model: config.model?.id || null,
           projectId: id,
+          analysisMode: config.analysisMode,
+          rowLimit: config.rowLimit,
+          minBucketThreshold: config.minBucketThreshold,
         }),
       });
-      const data = await res.json();
-      if (data.analysis) {
-        setActiveAnalysis(data.analysis);
-        setTab("analyses");
+
+      if (res.ok) {
+        await fetchAnalyses();
+        setExpandedSteps((s) => ({ ...s, 3: true }));
       }
+    } catch (err) {
+      console.error("Analysis start failed:", err);
     } finally {
       setAnalyzing(false);
     }
   };
 
-  const handleExport = async (analysisId: string) => {
-    const res = await fetch(`/api/analyses/${analysisId}/export`);
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `enriched_export_${analysisId.slice(0, 8)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const toggleStep = (step: number) => {
+    setExpandedSteps((s) => ({ ...s, [step]: !s[step] }));
   };
 
-  const deleteWorkbook = async (wbId: string) => {
-    if (!confirm("Delete this file and all its analyses?")) return;
-    await fetch(`/api/workbooks/${wbId}`, { method: "DELETE" });
-    fetchProject();
+  // ── Helpers ───────────────────────────────────────────
+  const formatDate = (d: string) => new Date(d).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1048576).toFixed(1)} MB`;
   };
 
-  const currentWorkbook = workbooks.find((w) => w.id === selectedWorkbook);
+  const getStatusClass = (status: string) => {
+    const map: Record<string, string> = {
+      completed: "status-badge--completed",
+      processing: "status-badge--processing",
+      pending: "status-badge--pending",
+      failed: "status-badge--failed",
+      completed_partial: "status-badge--active",
+    };
+    return map[status] || "";
+  };
 
-  if (loading) return <div className="page"><div className="loading-state">Loading project...</div></div>;
+  const hasFiles = workbooks.length > 0;
+  const hasAnalyses = analyses.length > 0;
+  const activeAnalysis = analyses.find((a) => a.status === "processing" || a.status === "pending");
+
+  if (loading) return <div className="loading-state">Loading project...</div>;
+  if (!project) return <div className="empty-state">Project not found</div>;
 
   return (
     <div className="page">
+      {/* Header */}
       <div className="page__header">
+        <button className="page__back" onClick={() => router.push("/projects")}>
+          <ArrowLeft size={16} /> Projects
+        </button>
         <div>
-          <Link href="/projects" className="page__back">
-            <ArrowLeft size={16} /> Projects
-          </Link>
-          <h1 className="page__title">{project?.name || "Project"}</h1>
-          {project?.description && (
+          <h1 className="page__title">{project.name}</h1>
+          {project.description && (
             <p className="page__subtitle">{project.description}</p>
           )}
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="tabs">
-        <button
-          className={`tab ${tab === "files" ? "tab--active" : ""}`}
-          onClick={() => setTab("files")}
-        >
-          <FileSpreadsheet size={16} />
-          Files ({workbooks.length})
-        </button>
-        <button
-          className={`tab ${tab === "analyses" ? "tab--active" : ""}`}
-          onClick={() => setTab("analyses")}
-        >
-          <BarChart3 size={16} />
-          Analyses ({analyses.length})
-        </button>
-        <button
-          className={`tab ${tab === "results" ? "tab--active" : ""}`}
-          onClick={() => setTab("results")}
-        >
-          <FolderTree size={16} />
-          Results
-        </button>
+      {/* Step 1: Upload Files */}
+      <div className={`step-card ${expandedSteps[1] ? "step-card--active" : ""} ${hasFiles ? "step-card--done" : ""}`}>
+        <div className="step-card__header" onClick={() => toggleStep(1)}>
+          <div className="step-card__number">{hasFiles ? <CheckCircle2 size={16} /> : "1"}</div>
+          <span className="step-card__title">Upload Files</span>
+          <span className="step-card__badge">{workbooks.length} file{workbooks.length !== 1 ? "s" : ""}</span>
+          {expandedSteps[1] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </div>
+
+        {expandedSteps[1] && (
+          <div className="step-card__body">
+            {/* Upload zone */}
+            <div
+              className="upload-drop-zone"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {uploading ? (
+                <>
+                  <Loader2 size={28} className="upload-drop-zone__icon spin" />
+                  <span>Uploading... {uploadProgress}%</span>
+                  <div className="progress-bar" style={{ marginTop: 8, width: "100%", maxWidth: 300 }}>
+                    <div className="progress-bar__fill" style={{ width: `${uploadProgress}%` }} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Upload size={28} className="upload-drop-zone__icon" />
+                  <span>Drop a CSV here or click to upload</span>
+                  <span className="upload-drop-zone__hint">Supports .csv files</span>
+                </>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleUpload}
+                className="hidden"
+              />
+            </div>
+
+            {/* File list */}
+            {workbooks.map((wb) => (
+              <div
+                key={wb.id}
+                className={`file-item ${selectedWorkbook?.id === wb.id ? "file-item--selected" : ""}`}
+                onClick={() => {
+                  setSelectedWorkbook(wb);
+                  setExpandedSteps((s) => ({ ...s, 2: true }));
+                }}
+                style={{ cursor: "pointer", marginTop: 8 }}
+              >
+                <div className="file-item__icon">
+                  <FileText size={20} />
+                </div>
+                <div className="file-item__info">
+                  <span className="file-item__name">{wb.filename}</span>
+                  <span className="file-item__meta">
+                    {wb.row_count.toLocaleString()} rows · {wb.columns.length} columns · {formatBytes(wb.file_size_bytes)}
+                  </span>
+                </div>
+                {selectedWorkbook?.id === wb.id && (
+                  <span className="badge badge--info" style={{ marginLeft: "auto" }}>Selected</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Files Tab */}
-      {tab === "files" && (
-        <div className="tab-content">
-          <div className="upload-section">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              onChange={handleUpload}
-              className="hidden"
-              id="file-upload"
-            />
-            <label htmlFor="file-upload" className="upload-drop-zone">
-              <Upload size={32} className="upload-drop-zone__icon" />
-              <span className="upload-drop-zone__text">
-                {uploading ? "Uploading..." : "Click to upload CSV file"}
-              </span>
-              <span className="upload-drop-zone__hint">
-                Supports CSV files up to 100MB
-              </span>
-            </label>
+      {/* Step 2: Configure Analysis */}
+      <div className={`step-card ${expandedSteps[2] ? "step-card--active" : ""}`}>
+        <div className="step-card__header" onClick={() => toggleStep(2)}>
+          <div className="step-card__number">2</div>
+          <span className="step-card__title">Configure Analysis</span>
+          {selectedWorkbook && (
+            <span className="step-card__badge">{selectedWorkbook.filename}</span>
+          )}
+          {expandedSteps[2] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </div>
+
+        {expandedSteps[2] && (
+          <div className="step-card__body">
+            {!selectedWorkbook ? (
+              <div className="empty-state">
+                <p>Upload a file first to configure analysis</p>
+              </div>
+            ) : (
+              <AnalysisConfigPanel
+                columns={selectedWorkbook.columns}
+                totalRows={selectedWorkbook.row_count}
+                onRunAnalysis={handleRunAnalysis}
+                disabled={analyzing || !!activeAnalysis}
+              />
+            )}
           </div>
+        )}
+      </div>
 
-          {workbooks.length > 0 && (
-            <div className="file-list">
-              {workbooks.map((wb) => (
-                <div
-                  key={wb.id}
-                  className={`file-item ${selectedWorkbook === wb.id ? "file-item--selected" : ""}`}
-                  onClick={() => setSelectedWorkbook(wb.id)}
-                >
-                  <div className="file-item__info">
-                    <FileSpreadsheet size={18} />
-                    <div>
-                      <span className="file-item__name">
-                        {wb.display_name || wb.filename}
-                      </span>
-                      <span className="file-item__meta">
-                        {wb.row_count.toLocaleString()} rows · {wb.columns.length} columns · {(wb.file_size_bytes / 1024 / 1024).toFixed(1)}MB
-                      </span>
-                    </div>
-                  </div>
-                  <div className="file-item__actions">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteWorkbook(wb.id); }}
-                      className="btn-icon btn-icon--danger"
-                      title="Delete"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+      {/* Active Analysis Progress */}
+      {activeAnalysis && (
+        <div className="step-card step-card--active" style={{ borderColor: "var(--accent-blue)" }}>
+          <div className="step-card__header">
+            <Loader2 size={20} className="spin" style={{ color: "var(--accent-blue)" }} />
+            <span className="step-card__title">Analysis In Progress</span>
+            <span className={`status-badge ${getStatusClass(activeAnalysis.status)}`}>
+              {activeAnalysis.status}
+            </span>
+          </div>
+          <div className="step-card__body">
+            <div className="progress-bar" style={{ marginBottom: 8 }}>
+              <div className="progress-bar__fill" style={{ width: `${activeAnalysis.progress}%` }} />
             </div>
-          )}
-
-          {/* Analysis Setup (when file selected) */}
-          {currentWorkbook && (
-            <div className="card analyze-card">
-              <div className="card__header">
-                <h3 className="card__title">Run Analysis</h3>
-              </div>
-              <div className="card__body">
-                <label className="form-label">
-                  Select Column
-                  <select
-                    value={selectedColumn}
-                    onChange={(e) => setSelectedColumn(e.target.value)}
-                    className="form-input"
-                  >
-                    <option value="">Choose column...</option>
-                    {currentWorkbook.columns.map((col) => (
-                      <option key={col} value={col}>
-                        {col}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="form-label">
-                  AI Provider
-                  <select
-                    value={aiProvider}
-                    onChange={(e) => setAiProvider(e.target.value)}
-                    className="form-input"
-                  >
-                    <option value="gemini">Google Gemini</option>
-                    <option value="openai">OpenAI GPT-4o</option>
-                    <option value="claude">Anthropic Claude</option>
-                    <option value="openrouter">OpenRouter (Free)</option>
-                  </select>
-                </label>
-                <button
-                  onClick={handleAnalyze}
-                  disabled={!selectedColumn || analyzing}
-                  className="btn btn--primary btn--lg"
-                >
-                  {analyzing ? (
-                    <><Loader2 size={18} className="spin" /> Starting Analysis...</>
-                  ) : (
-                    <><Play size={18} /> Run Analysis</>
-                  )}
-                </button>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.82rem", color: "#64748b" }}>
+              <span>{activeAnalysis.message || "Processing..."}</span>
+              <span>{activeAnalysis.progress}%</span>
             </div>
-          )}
+            <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: "0.78rem", color: "#94a3b8" }}>
+              <span>{activeAnalysis.total_rows_processed}/{activeAnalysis.total_rows} rows</span>
+              <span>Mode: {activeAnalysis.analysis_mode.replace(/_/g, " ")}</span>
+              <span>Provider: {activeAnalysis.ai_provider}</span>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Analyses Tab */}
-      {tab === "analyses" && (
-        <div className="tab-content">
-          {activeAnalysis && ["pending", "processing"].includes(activeAnalysis.status) && (
-            <div className="card progress-card">
-              <div className="card__header">
-                <h3 className="card__title">Analysis in Progress</h3>
-                <span className="status-badge status-badge--processing">Processing</span>
-              </div>
-              <div className="card__body">
-                <div className="progress-bar">
-                  <div
-                    className="progress-bar__fill"
-                    style={{ width: `${activeAnalysis.progress}%` }}
-                  />
-                </div>
-                <p className="progress-message">
-                  {activeAnalysis.message || `${activeAnalysis.progress}% complete`}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {analyses.length === 0 ? (
-            <div className="empty-state">
-              <p>No analyses yet. Upload a file and run analysis from the Files tab.</p>
-            </div>
-          ) : (
-            <div className="analysis-list">
-              {analyses.map((a) => (
-                <div key={a.id} className="analysis-item">
-                  <div className="analysis-item__info">
-                    <span className={`status-badge status-badge--${a.status}`}>
-                      {a.status === "completed" ? <CheckCircle2 size={14} /> : a.status === "failed" ? <XCircle size={14} /> : null}
-                      {a.status}
-                    </span>
-                    <span className="analysis-item__column">Column: {a.selected_column}</span>
-                    <span className="analysis-item__provider">{a.ai_provider}</span>
-                    <span className="analysis-item__rows">
-                      {a.total_rows_processed?.toLocaleString()} / {a.total_rows?.toLocaleString()} rows
-                    </span>
-                  </div>
-                  <div className="analysis-item__actions">
-                    <span className="analysis-item__date">
-                      {new Date(a.created_at).toLocaleString()}
-                    </span>
-                    {a.status === "completed" && (
-                      <button
-                        onClick={() => handleExport(a.id)}
-                        className="btn btn--sm btn--ghost"
-                      >
-                        <Download size={14} /> Export CSV
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+      {/* Step 3: Results */}
+      <div className={`step-card ${expandedSteps[3] ? "step-card--active" : ""} ${hasAnalyses ? "step-card--done" : ""}`}>
+        <div className="step-card__header" onClick={() => toggleStep(3)}>
+          <div className="step-card__number">{hasAnalyses ? <CheckCircle2 size={16} /> : "3"}</div>
+          <span className="step-card__title">Results</span>
+          <span className="step-card__badge">{analyses.length} analysis{analyses.length !== 1 ? "es" : ""}</span>
+          {expandedSteps[3] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </div>
-      )}
 
-      {/* Results Tab */}
-      {tab === "results" && (
-        <div className="tab-content">
-          {analyses.filter((a) => a.status === "completed").length === 0 ? (
-            <div className="empty-state">
-              <p>Complete an analysis to view results here.</p>
-            </div>
-          ) : (
-            <div>
-              {analyses
-                .filter((a) => a.status === "completed")
-                .map((a) => (
-                  <div key={a.id} className="card results-card">
-                    <div className="card__header">
-                      <h3 className="card__title">
-                        Analysis: {a.selected_column}
-                      </h3>
-                      <button
-                        onClick={() => handleExport(a.id)}
-                        className="btn btn--sm btn--primary"
+        {expandedSteps[3] && (
+          <div className="step-card__body">
+            {analyses.length === 0 ? (
+              <div className="empty-state">
+                <BarChart3 size={32} className="empty-state__icon" />
+                <h3>No analyses yet</h3>
+                <p>Configure and run an analysis above to see results</p>
+              </div>
+            ) : (
+              analyses
+                .filter((a) => a.status !== "processing" && a.status !== "pending")
+                .map((analysis) => {
+                  const isExpanded = expandedAnalysis === analysis.id;
+                  const dist = analysis.bucket_distribution || {};
+                  const sorted = Object.entries(dist).sort(([, a], [, b]) => b - a);
+                  const maxCount = sorted.length > 0 ? sorted[0][1] : 1;
+                  const totalProcessed = analysis.total_rows_processed || analysis.total_rows;
+
+                  return (
+                    <div key={analysis.id} className="analysis-card" style={{ marginBottom: 12 }}>
+                      {/* Analysis header */}
+                      <div
+                        className="file-item"
+                        onClick={() => setExpandedAnalysis(isExpanded ? null : analysis.id)}
+                        style={{ cursor: "pointer" }}
                       >
-                        <Download size={14} /> Export CSV
-                      </button>
-                    </div>
-                    <div className="card__body">
-                      <div className="results-stats">
-                        <div className="results-stat">
-                          <span className="results-stat__value">{a.total_rows?.toLocaleString()}</span>
-                          <span className="results-stat__label">Total Rows</span>
+                        <div className="file-item__icon">
+                          {analysis.status === "completed" ? (
+                            <CheckCircle2 size={20} style={{ color: "var(--primary)" }} />
+                          ) : analysis.status === "failed" ? (
+                            <XCircle size={20} style={{ color: "var(--accent-red)" }} />
+                          ) : (
+                            <Clock size={20} />
+                          )}
                         </div>
-                        <div className="results-stat">
-                          <span className="results-stat__value">{a.total_rows_processed?.toLocaleString()}</span>
-                          <span className="results-stat__label">Processed</span>
-                        </div>
-                        <div className="results-stat">
-                          <span className="results-stat__value">
-                            {Object.keys(a.bucket_distribution || {}).length}
+                        <div className="file-item__info">
+                          <span className="file-item__name">
+                            {analysis.selected_column} — {analysis.analysis_mode.replace(/_/g, " ")}
                           </span>
-                          <span className="results-stat__label">Buckets Used</span>
+                          <span className="file-item__meta">
+                            {totalProcessed.toLocaleString()} rows ·
+                            {analysis.ai_provider !== "deterministic" ? ` ${analysis.ai_model || analysis.ai_provider} · ` : " "}
+                            {Object.keys(dist).length} buckets
+                            {analysis.estimated_cost > 0 ? ` · $${Number(analysis.estimated_cost).toFixed(4)}` : " · Free"}
+                          </span>
                         </div>
+                        <span className={`status-badge ${getStatusClass(analysis.status)}`}>
+                          {analysis.status}
+                        </span>
+                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                       </div>
-                      {a.bucket_distribution && (
-                        <div className="bucket-bars">
-                          {Object.entries(a.bucket_distribution)
-                            .sort((a, b) => b[1] - a[1])
-                            .map(([name, count]) => {
-                              const max = Math.max(...Object.values(a.bucket_distribution));
-                              return (
-                                <div key={name} className="bucket-bar">
-                                  <div className="bucket-bar__label">
-                                    <span className="bucket-bar__name">{name}</span>
-                                    <span className="bucket-bar__count">{count.toLocaleString()}</span>
-                                  </div>
-                                  <div className="bucket-bar__track">
-                                    <div
-                                      className="bucket-bar__fill"
-                                      style={{ width: `${(count / max) * 100}%` }}
-                                    />
-                                  </div>
+
+                      {/* Expanded details */}
+                      {isExpanded && (
+                        <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
+                          {/* Stats row */}
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+                            <div className="results-stat">
+                              <span className="results-stat__value">{analysis.exact_matches}</span>
+                              <span className="results-stat__label">High Confidence</span>
+                            </div>
+                            <div className="results-stat">
+                              <span className="results-stat__value">{analysis.ai_classified}</span>
+                              <span className="results-stat__label">AI Classified</span>
+                            </div>
+                            <div className="results-stat">
+                              <span className="results-stat__value">{analysis.general_bucket_count}</span>
+                              <span className="results-stat__label">General</span>
+                            </div>
+                            <div className="results-stat">
+                              <span className="results-stat__value">
+                                {analysis.estimated_cost > 0 ? `$${Number(analysis.estimated_cost).toFixed(4)}` : "$0"}
+                              </span>
+                              <span className="results-stat__label">Total Cost</span>
+                            </div>
+                          </div>
+
+                          {/* Bucket distribution */}
+                          <h4 style={{ fontSize: "0.82rem", fontWeight: 600, marginBottom: 8 }}>
+                            Bucket Distribution
+                          </h4>
+                          <div className="bucket-list">
+                            {sorted.map(([bucket, count]) => (
+                              <div key={bucket} className="bucket-bar">
+                                <div className="bucket-bar__header">
+                                  <span className="bucket-bar__name">{bucket}</span>
+                                  <span className="bucket-bar__count">
+                                    {count} ({totalProcessed > 0 ? Math.round((count / totalProcessed) * 100) : 0}%)
+                                  </span>
                                 </div>
-                              );
-                            })}
+                                <div className="bucket-bar__track">
+                                  <div
+                                    className="bucket-bar__fill"
+                                    style={{ width: `${(count / maxCount) * 100}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Actions */}
+                          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                            <a
+                              href={`/api/analyses/${analysis.id}/export`}
+                              className="btn btn--ghost"
+                              style={{ fontSize: "0.82rem" }}
+                            >
+                              <Download size={14} /> Export CSV
+                            </a>
+                          </div>
                         </div>
                       )}
                     </div>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
+                  );
+                })
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

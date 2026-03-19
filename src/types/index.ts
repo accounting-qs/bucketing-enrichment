@@ -63,6 +63,10 @@ export interface Analysis {
   status: "pending" | "processing" | "completed" | "failed" | "paused" | "completed_partial";
   progress: number;
   message: string | null;
+  analysis_mode: "ai_only" | "deterministic_only" | "deterministic_then_ai" | "ai_then_deterministic";
+  row_limit: number | null;
+  min_bucket_threshold: number;
+  estimated_cost: number;
 
   // Metrics
   total_rows: number;
@@ -100,8 +104,8 @@ export interface AnalysisRow {
   analysis_id: string;
   row_index: number;
   original_value: string | null;
-  all_columns: Record<string, unknown>; // Full original row data
-  industry: string; // The assigned bucket name
+  all_columns: Record<string, unknown>;
+  industry: string;
   bucket_name: string;
   root_category: string | null;
   direct_ancestor: string | null;
@@ -109,6 +113,7 @@ export interface AnalysisRow {
   reason: string | null;
   is_generic: boolean;
   is_disqualified: boolean;
+  cost_usd: number;
 }
 
 // --- Jobs ---
