@@ -4,8 +4,8 @@
  * Uses the taxonomy's include/exclude terms to classify values
  * without any AI API calls. Instant and free.
  *
- * Conflict resolution: weighted scoring based on term specificity.
- * If top-2 bucket scores are within 10%, mark as needs_ai.
+ * Now examines ALL columns in a row for maximum signal,
+ * not just the selected column.
  */
 
 import type { BucketDefinition } from "@/types";
@@ -20,32 +20,40 @@ export interface DeterministicResult {
 }
 
 /**
- * Classify a batch of values deterministically using keyword matching
+ * Classify a batch of rows deterministically using keyword matching.
+ * Each item contains the full row data for multi-column matching.
  */
 export function classifyDeterministic(
-  batch: { index: number; value: string }[],
+  batch: { index: number; value: string; allColumns?: Record<string, string> }[],
   taxonomy: BucketDefinition[]
 ): DeterministicResult[] {
-  return batch.map((item) => classifyOne(item.index, item.value, taxonomy));
+  return batch.map((item) => classifyOne(item.index, item.value, item.allColumns || {}, taxonomy));
 }
 
 function classifyOne(
   index: number,
-  value: string,
+  primaryValue: string,
+  allColumns: Record<string, string>,
   taxonomy: BucketDefinition[]
 ): DeterministicResult {
-  const lower = value.toLowerCase().trim();
+  const primaryLower = primaryValue.toLowerCase().trim();
 
-  if (!lower) {
+  if (!primaryLower) {
     return {
       index,
-      value,
+      value: primaryValue,
       bucket: "General Industry",
       confidence: 0,
       method: "needs_ai",
       reason: "Empty value",
     };
   }
+
+  // Build a combined search string from ALL columns for broader matching
+  const allValuesArr = Object.values(allColumns).filter(Boolean);
+  const combinedLower = allValuesArr.map((v) => v.toLowerCase().trim()).join(" | ");
+  // Primary value gets priority; combined gives additional signals
+  const searchStrings = [primaryLower, combinedLower].filter(Boolean);
 
   const scores: { bucket: BucketDefinition; score: number; matchedTerms: string[] }[] = [];
 
@@ -56,9 +64,9 @@ function classifyOne(
     const matchedTerms: string[] = [];
     let excluded = false;
 
-    // Check exclude terms first
+    // Check exclude terms on primary value
     for (const term of bucket.exclude) {
-      if (lower.includes(term.toLowerCase())) {
+      if (primaryLower.includes(term.toLowerCase())) {
         excluded = true;
         break;
       }
@@ -66,26 +74,35 @@ function classifyOne(
 
     if (excluded) continue;
 
-    // Score include terms with specificity weighting
+    // Score include terms — check primary first (higher weight), then all columns
     for (const term of bucket.include) {
       const termLower = term.toLowerCase();
-      if (lower.includes(termLower)) {
-        // Weight by term length (longer = more specific)
-        const weight = Math.max(1, termLower.split(" ").length);
-        // Bonus for exact phrase match
-        const exactBonus = lower === termLower ? 3 : 0;
-        score += weight + exactBonus;
+
+      // Primary value match (higher weight)
+      if (primaryLower.includes(termLower)) {
+        const wordCount = Math.max(1, termLower.split(" ").length);
+        const exactBonus = primaryLower === termLower ? 5 : 0;
+        score += wordCount * 2 + exactBonus; // Double weight for primary column
         matchedTerms.push(term);
+      }
+      // Secondary match in other columns (lower weight)
+      else if (combinedLower.includes(termLower)) {
+        const wordCount = Math.max(1, termLower.split(" ").length);
+        score += wordCount; // Single weight for secondary columns
+        matchedTerms.push(`~${term}`);
       }
     }
 
-    // Check example_strings for additional scoring
+    // Check example_strings
     for (const example of bucket.example_strings) {
       const exLower = example.toLowerCase();
-      // Check if the value is very similar to an example
-      if (lower.includes(exLower) || exLower.includes(lower)) {
-        score += 2;
-        matchedTerms.push(`~${example.substring(0, 30)}`);
+      
+      if (primaryLower.includes(exLower) || exLower.includes(primaryLower)) {
+        score += 4; // Strong match
+        matchedTerms.push(`≈${example.substring(0, 30)}`);
+      } else if (combinedLower.includes(exLower) || exLower.includes(combinedLower.substring(0, 80))) {
+        score += 1;
+        matchedTerms.push(`~≈${example.substring(0, 25)}`);
       }
     }
 
@@ -100,7 +117,7 @@ function classifyOne(
   if (scores.length === 0) {
     return {
       index,
-      value,
+      value: primaryValue,
       bucket: "General Industry",
       confidence: 0.1,
       method: "needs_ai",
@@ -109,45 +126,45 @@ function classifyOne(
   }
 
   const top = scores[0];
-  const maxPossibleScore = top.bucket.include.length * 2 + top.bucket.example_strings.length * 2;
-  const normalizedConfidence = Math.min(1, top.score / Math.max(maxPossibleScore, 4));
+  const maxPossibleScore = top.bucket.include.length * 4 + top.bucket.example_strings.length * 4;
+  const normalizedConfidence = Math.min(1, top.score / Math.max(maxPossibleScore, 6));
 
-  // Check for conflict: if second-best score is within 10% of top
+  // Check for conflict: if second-best score is within 15% of top
   if (scores.length >= 2) {
     const second = scores[1];
     const ratio = second.score / top.score;
-    if (ratio >= 0.9) {
+    if (ratio >= 0.85) {
       return {
         index,
-        value,
+        value: primaryValue,
         bucket: top.bucket.bucket_name,
-        confidence: normalizedConfidence * 0.5, // Lower confidence due to ambiguity
+        confidence: normalizedConfidence * 0.5,
         method: "needs_ai",
-        reason: `Ambiguous: "${top.bucket.bucket_name}" (${top.score.toFixed(1)}) vs "${second.bucket.bucket_name}" (${second.score.toFixed(1)})`,
+        reason: `Ambiguous: "${top.bucket.bucket_name}" vs "${second.bucket.bucket_name}"`,
       };
     }
   }
 
-  // Confident classification
-  if (normalizedConfidence >= 0.4) {
+  // Confident classification — lowered threshold from 0.4 to 0.2 for broader acceptance
+  if (normalizedConfidence >= 0.2) {
     return {
       index,
-      value,
+      value: primaryValue,
       bucket: top.bucket.bucket_name,
       confidence: normalizedConfidence,
       method: "deterministic",
-      reason: `Matched: ${top.matchedTerms.join(", ")}`,
+      reason: `Matched: ${top.matchedTerms.slice(0, 4).join(", ")}`,
     };
   }
 
   // Low confidence — needs AI review
   return {
     index,
-    value,
+    value: primaryValue,
     bucket: top.bucket.bucket_name,
     confidence: normalizedConfidence,
     method: "needs_ai",
-    reason: `Low confidence match: ${top.matchedTerms.join(", ")}`,
+    reason: `Low confidence: ${top.matchedTerms.slice(0, 3).join(", ")}`,
   };
 }
 
@@ -158,13 +175,11 @@ export function applyBucketThreshold(
   results: DeterministicResult[],
   minThreshold: number
 ): DeterministicResult[] {
-  // Count contacts per bucket
   const counts: Record<string, number> = {};
   for (const r of results) {
     counts[r.bucket] = (counts[r.bucket] || 0) + 1;
   }
 
-  // Identify buckets below threshold
   const smallBuckets = new Set<string>();
   for (const [bucket, count] of Object.entries(counts)) {
     if (bucket !== "General Industry" && count < minThreshold) {
@@ -174,13 +189,12 @@ export function applyBucketThreshold(
 
   if (smallBuckets.size === 0) return results;
 
-  // Reassign small bucket contacts to General Industry
   return results.map((r) => {
     if (smallBuckets.has(r.bucket)) {
       return {
         ...r,
         bucket: "General Industry",
-        reason: `${r.reason} [Merged: bucket had < ${minThreshold} contacts]`,
+        reason: `${r.reason} [Merged: < ${minThreshold} contacts]`,
       };
     }
     return r;

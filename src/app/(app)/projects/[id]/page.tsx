@@ -452,63 +452,7 @@ export default function ProjectDetailPage() {
 
                       {/* Expanded details */}
                       {isExpanded && (
-                        <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
-                          {/* Stats row */}
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-                            <div className="results-stat">
-                              <span className="results-stat__value">{analysis.exact_matches}</span>
-                              <span className="results-stat__label">High Confidence</span>
-                            </div>
-                            <div className="results-stat">
-                              <span className="results-stat__value">{analysis.ai_classified}</span>
-                              <span className="results-stat__label">AI Classified</span>
-                            </div>
-                            <div className="results-stat">
-                              <span className="results-stat__value">{analysis.general_bucket_count}</span>
-                              <span className="results-stat__label">General</span>
-                            </div>
-                            <div className="results-stat">
-                              <span className="results-stat__value">
-                                {analysis.estimated_cost > 0 ? `$${Number(analysis.estimated_cost).toFixed(4)}` : "$0"}
-                              </span>
-                              <span className="results-stat__label">Total Cost</span>
-                            </div>
-                          </div>
-
-                          {/* Bucket distribution */}
-                          <h4 style={{ fontSize: "0.82rem", fontWeight: 600, marginBottom: 8 }}>
-                            Bucket Distribution
-                          </h4>
-                          <div className="bucket-list">
-                            {sorted.map(([bucket, count]) => (
-                              <div key={bucket} className="bucket-bar">
-                                <div className="bucket-bar__header">
-                                  <span className="bucket-bar__name">{bucket}</span>
-                                  <span className="bucket-bar__count">
-                                    {count} ({totalProcessed > 0 ? Math.round((count / totalProcessed) * 100) : 0}%)
-                                  </span>
-                                </div>
-                                <div className="bucket-bar__track">
-                                  <div
-                                    className="bucket-bar__fill"
-                                    style={{ width: `${(count / maxCount) * 100}%` }}
-                                  />
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-
-                          {/* Actions */}
-                          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                            <a
-                              href={`/api/analyses/${analysis.id}/export`}
-                              className="btn btn--ghost"
-                              style={{ fontSize: "0.82rem" }}
-                            >
-                              <Download size={14} /> Export CSV
-                            </a>
-                          </div>
-                        </div>
+                        <AnalysisDetails analysis={analysis} sorted={sorted} maxCount={maxCount} totalProcessed={totalProcessed} />
                       )}
                     </div>
                   );
@@ -517,6 +461,215 @@ export default function ProjectDetailPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Analysis Details Sub-Component ──────────────────────
+
+interface AnalysisRow {
+  id: number;
+  row_index: number;
+  original_value: string;
+  all_columns: string | Record<string, string>;
+  bucket_name: string;
+  confidence: number | null;
+  reason: string | null;
+  is_generic: boolean;
+  is_disqualified: boolean;
+  cost_usd: number;
+}
+
+function AnalysisDetails({
+  analysis,
+  sorted,
+  maxCount,
+  totalProcessed,
+}: {
+  analysis: Analysis;
+  sorted: [string, number][];
+  maxCount: number;
+  totalProcessed: number;
+}) {
+  const [rows, setRows] = useState<AnalysisRow[]>([]);
+  const [loadingRows, setLoadingRows] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRowCount, setTotalRowCount] = useState(0);
+  const [bucketFilter, setBucketFilter] = useState("all");
+  const [showTable, setShowTable] = useState(false);
+
+  const dist = analysis.bucket_distribution || {};
+
+  const fetchRows = useCallback(async (p: number, bucket: string) => {
+    setLoadingRows(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(p),
+        pageSize: "50",
+        sort: "row_index",
+        order: "asc",
+      });
+      if (bucket && bucket !== "all") params.set("bucket", bucket);
+
+      const res = await fetch(`/api/analyses/${analysis.id}/rows?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setRows(data.rows || []);
+        setTotalPages(data.pagination?.totalPages || 1);
+        setTotalRowCount(data.pagination?.total || 0);
+        setPage(data.pagination?.page || 1);
+      }
+    } catch (err) {
+      console.error("Failed to load rows:", err);
+    } finally {
+      setLoadingRows(false);
+    }
+  }, [analysis.id]);
+
+  useEffect(() => {
+    if (showTable) fetchRows(1, bucketFilter);
+  }, [showTable, bucketFilter, fetchRows]);
+
+  return (
+    <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
+      {/* Stats row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+        <div className="results-stat">
+          <span className="results-stat__value">{analysis.exact_matches}</span>
+          <span className="results-stat__label">High Confidence</span>
+        </div>
+        <div className="results-stat">
+          <span className="results-stat__value">{analysis.ai_classified}</span>
+          <span className="results-stat__label">AI Classified</span>
+        </div>
+        <div className="results-stat">
+          <span className="results-stat__value">{analysis.general_bucket_count}</span>
+          <span className="results-stat__label">General</span>
+        </div>
+        <div className="results-stat">
+          <span className="results-stat__value">
+            {analysis.estimated_cost > 0 ? `$${Number(analysis.estimated_cost).toFixed(4)}` : "$0"}
+          </span>
+          <span className="results-stat__label">Total Cost</span>
+        </div>
+      </div>
+
+      {/* Bucket distribution */}
+      <h4 style={{ fontSize: "0.82rem", fontWeight: 600, marginBottom: 8 }}>Bucket Distribution</h4>
+      <div className="bucket-list">
+        {sorted.map(([bucket, count]) => (
+          <div key={bucket} className="bucket-bar">
+            <div className="bucket-bar__header">
+              <span className="bucket-bar__name">{bucket}</span>
+              <span className="bucket-bar__count">
+                {count} ({totalProcessed > 0 ? Math.round((count / totalProcessed) * 100) : 0}%)
+              </span>
+            </div>
+            <div className="bucket-bar__track">
+              <div className="bucket-bar__fill" style={{ width: `${(count / maxCount) * 100}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+        <a href={`/api/analyses/${analysis.id}/export`} className="btn btn--ghost" style={{ fontSize: "0.82rem" }}>
+          <Download size={14} /> Export CSV
+        </a>
+        <button
+          className="btn btn--ghost"
+          style={{ fontSize: "0.82rem" }}
+          onClick={() => setShowTable(!showTable)}
+        >
+          <BarChart3 size={14} /> {showTable ? "Hide" : "View"} Data Table
+        </button>
+      </div>
+
+      {/* Data Table */}
+      {showTable && (
+        <div style={{ marginTop: 16 }}>
+          {/* Filter row */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <select
+              value={bucketFilter}
+              onChange={(e) => setBucketFilter(e.target.value)}
+              className="form-input"
+              style={{ maxWidth: 250, fontSize: "0.78rem" }}
+            >
+              <option value="all">All Buckets ({totalRowCount})</option>
+              {Object.entries(dist).sort(([, a], [, b]) => (b as number) - (a as number)).map(([b, c]) => (
+                <option key={b} value={b}>{b} ({c as number})</option>
+              ))}
+            </select>
+            <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
+              Page {page}/{totalPages} · {totalRowCount} rows
+            </span>
+          </div>
+
+          {loadingRows ? (
+            <div className="loading-state" style={{ padding: 24 }}>Loading rows...</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Original Value</th>
+                    <th>Bucket</th>
+                    <th>Confidence</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.row_index + 1}</td>
+                      <td style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {row.original_value}
+                      </td>
+                      <td>
+                        <span className={`bucket-tag ${row.bucket_name === "General Industry" ? "bucket-tag--general" : ""}`}>
+                          {row.bucket_name}
+                        </span>
+                      </td>
+                      <td>
+                        {row.confidence != null ? (
+                          <span className={`confidence-badge ${row.confidence >= 0.7 ? "confidence--high" : row.confidence >= 0.4 ? "confidence--mid" : "confidence--low"}`}>
+                            {Math.round(row.confidence * 100)}%
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", color: "#94a3b8" }}>
+                        {row.reason || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  {rows.length === 0 && (
+                    <tr><td colSpan={5} style={{ textAlign: "center", padding: 24, color: "#94a3b8" }}>No rows found</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 8 }}>
+              <button className="btn btn--ghost btn--sm" disabled={page <= 1} onClick={() => fetchRows(page - 1, bucketFilter)}>
+                ← Prev
+              </button>
+              <span style={{ fontSize: "0.78rem", lineHeight: "32px", color: "#94a3b8" }}>
+                {page} / {totalPages}
+              </span>
+              <button className="btn btn--ghost btn--sm" disabled={page >= totalPages} onClick={() => fetchRows(page + 1, bucketFilter)}>
+                Next →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

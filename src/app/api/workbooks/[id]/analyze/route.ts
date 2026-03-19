@@ -152,7 +152,11 @@ async function processAnalysis(
     const allAnalysisRows: unknown[][] = [];
     let totalCostUsd = 0;
 
-    const values = rows.map((row, i) => ({ index: i, value: row[column] || "" }));
+    const values = rows.map((row, i) => ({
+      index: i,
+      value: row[column] || "",
+      allColumns: row,
+    }));
 
     // ─── Deterministic Only ─────────────────────────────
     if (analysisMode === "deterministic_only") {
@@ -207,7 +211,15 @@ async function processAnalysis(
 
       // AI pass on uncertain rows
       if (needsAI.length > 0) {
-        const aiValues = needsAI.map((r) => ({ index: r.index, value: r.value }));
+        const aiValues = needsAI.map((r) => {
+          const row = rows[r.index];
+          // Build enriched value with all column context for the AI
+          const allVals = Object.entries(row)
+            .filter(([k, v]) => v && v.trim())
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(" | ");
+          return { index: r.index, value: allVals || r.value };
+        });
         const aiResults = await processAIBatches(aiValues, taxonomy, provider as AIProvider, model, analysisId, jobId, rows, confident.length, rows.length);
         totalTokens = aiResults.tokenUsage;
         totalCostUsd = aiResults.totalCost;
@@ -223,7 +235,16 @@ async function processAnalysis(
     }
     // ─── AI → Deterministic ─────────────────────────────
     else if (analysisMode === "ai_then_deterministic") {
-      const aiResults = await processAIBatches(values, taxonomy, provider as AIProvider, model, analysisId, jobId, rows, 0, rows.length);
+      // Build enriched values with all column context for the AI
+      const enrichedValues = values.map((v) => {
+        const row = rows[v.index];
+        const allVals = Object.entries(row)
+          .filter(([k, val]) => val && val.trim())
+          .map(([k, val]) => `${k}: ${val}`)
+          .join(" | ");
+        return { index: v.index, value: allVals || v.value };
+      });
+      const aiResults = await processAIBatches(enrichedValues, taxonomy, provider as AIProvider, model, analysisId, jobId, rows, 0, rows.length);
       totalTokens = aiResults.tokenUsage;
       totalCostUsd = aiResults.totalCost;
 
@@ -257,7 +278,16 @@ async function processAnalysis(
     }
     // ─── AI Only ────────────────────────────────────────
     else {
-      const aiResults = await processAIBatches(values, taxonomy, provider as AIProvider, model, analysisId, jobId, rows, 0, rows.length);
+      // Build enriched values with all column context for the AI
+      const enrichedValues = values.map((v) => {
+        const row = rows[v.index];
+        const allVals = Object.entries(row)
+          .filter(([k, val]) => val && val.trim())
+          .map(([k, val]) => `${k}: ${val}`)
+          .join(" | ");
+        return { index: v.index, value: allVals || v.value };
+      });
+      const aiResults = await processAIBatches(enrichedValues, taxonomy, provider as AIProvider, model, analysisId, jobId, rows, 0, rows.length);
       totalTokens = aiResults.tokenUsage;
       totalCostUsd = aiResults.totalCost;
 
@@ -360,12 +390,13 @@ async function processAIBatches(
 
       for (const res of results) {
         const row = rows[res.index];
+        const originalValue = values.find(v => v.index === res.index)?.value || "";
         const bucketName = res.bucket_1.name || "General Industry";
         const isGeneric = res.generic || !res.bucket_1.name;
         const isDQ = res.disqualified;
 
         resultRows.push([
-          analysisId, res.index, row[batch[0]?.value ? Object.keys(row)[0] : ""] || values.find(v => v.index === res.index)?.value || "",
+          analysisId, res.index, originalValue,
           JSON.stringify(row),
           bucketName, bucketName, res.bucket_3.name || null, res.bucket_2.name || null,
           res.bucket_1.score || null, res.bucket_1.reason || null,
