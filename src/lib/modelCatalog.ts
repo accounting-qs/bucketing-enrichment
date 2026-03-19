@@ -217,9 +217,11 @@ async function fetchGeminiModels(): Promise<AIModel[]> {
       const methods: string[] = m.supportedGenerationMethods || [];
       if (!methods.includes("generateContent")) continue;
 
-      // Skip embedding, vision-only, TTS, and image models
+      // Skip embedding, vision-only, TTS, image gen, and video models
       if (id.includes("embed") || id.includes("tts") || id.includes("imagen") || id.includes("veo")) continue;
       if (id.includes("aqa") || id.includes("bisheng")) continue;
+      if (id.includes("image") || id.includes("live-api") || id.includes("deep-think")) continue;
+      if (id.includes("nano-banana")) continue;
 
       // Only keep Gemini 2.0+ (skip 1.0, 1.5 legacy)
       if (id.includes("gemini-1.0") || id.includes("gemini-1.5")) continue;
@@ -262,10 +264,11 @@ function getGeminiPricing(id: string): { input: number; output: number } {
 function getFallbackGeminiModels(): AIModel[] {
   return [
     { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", provider: "gemini", inputPrice: 1.25, outputPrice: 10.00, isFree: false, contextWindow: 1000000 },
-    { id: "gemini-3-flash", name: "Gemini 3 Flash", provider: "gemini", inputPrice: 0.10, outputPrice: 0.40, isFree: false, contextWindow: 1000000 },
     { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite", provider: "gemini", inputPrice: 0.02, outputPrice: 0.10, isFree: false, contextWindow: 1000000 },
+    { id: "gemini-3-flash", name: "Gemini 3 Flash", provider: "gemini", inputPrice: 0.10, outputPrice: 0.40, isFree: false, contextWindow: 1000000 },
     { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "gemini", inputPrice: 1.25, outputPrice: 10.00, isFree: false, contextWindow: 1000000 },
     { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", provider: "gemini", inputPrice: 0.15, outputPrice: 0.60, isFree: false, contextWindow: 1000000 },
+    { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite", provider: "gemini", inputPrice: 0.02, outputPrice: 0.10, isFree: false, contextWindow: 1000000 },
     { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash", provider: "gemini", inputPrice: 0.10, outputPrice: 0.40, isFree: false, contextWindow: 1000000 },
   ];
 }
@@ -276,10 +279,12 @@ function getFallbackGeminiModels(): AIModel[] {
 
 function getClaudeModels(): AIModel[] {
   return [
-    { id: "claude-opus-4-20260205", name: "Claude Opus 4.6", provider: "claude", inputPrice: 15.00, outputPrice: 75.00, isFree: false, contextWindow: 200000 },
-    { id: "claude-sonnet-4-20260217", name: "Claude Sonnet 4.6", provider: "claude", inputPrice: 3.00, outputPrice: 15.00, isFree: false, contextWindow: 200000 },
-    { id: "claude-haiku-4-20251015", name: "Claude Haiku 4.5", provider: "claude", inputPrice: 0.80, outputPrice: 4.00, isFree: false, contextWindow: 200000 },
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "claude", inputPrice: 15.00, outputPrice: 75.00, isFree: false, contextWindow: 200000 },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "claude", inputPrice: 3.00, outputPrice: 15.00, isFree: false, contextWindow: 200000 },
+    { id: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5", provider: "claude", inputPrice: 3.00, outputPrice: 15.00, isFree: false, contextWindow: 200000 },
+    { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "claude", inputPrice: 0.80, outputPrice: 4.00, isFree: false, contextWindow: 200000 },
     { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", provider: "claude", inputPrice: 3.00, outputPrice: 15.00, isFree: false, contextWindow: 200000 },
+    { id: "claude-opus-4-1-20250805", name: "Claude Opus 4.1", provider: "claude", inputPrice: 15.00, outputPrice: 75.00, isFree: false, contextWindow: 200000 },
   ];
 }
 
