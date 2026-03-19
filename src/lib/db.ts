@@ -9,11 +9,14 @@ if (!DATABASE_URL) {
   );
 }
 
+// Enable SSL for any external DB (Render, Supabase, etc.)
+const needsSSL = DATABASE_URL
+  ? !DATABASE_URL.includes("localhost") && !DATABASE_URL.includes("127.0.0.1")
+  : false;
+
 const pool = new Pool({
   connectionString: DATABASE_URL || "postgresql://localhost/quantum_enricher",
-  ssl: DATABASE_URL?.includes("render.com")
-    ? { rejectUnauthorized: false }
-    : undefined,
+  ssl: needsSSL ? { rejectUnauthorized: false } : undefined,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
@@ -122,16 +125,25 @@ let migrationDone = false;
 
 /**
  * Run the schema migration (lazy, only on first DB call)
+ * Uses a dedicated client with transaction for multi-statement DDL
  */
 export async function ensureMigrations(): Promise<void> {
   if (migrationDone) return;
+  const client = await pool.connect();
   try {
-    await pool.query(SCHEMA_SQL);
+    await client.query("BEGIN");
+    await client.query(SCHEMA_SQL);
+    await client.query("COMMIT");
     migrationDone = true;
     console.log(">>> Database migration successful");
-  } catch (err) {
-    console.error(">>> Database migration error:", err);
-    // Don't mark as done — retry next time
+  } catch (err: unknown) {
+    await client.query("ROLLBACK").catch(() => {});
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(">>> Database migration error:", message);
+    // Don't mark as done — retry next time, but don't block the request
+    // The actual query will fail with a more descriptive error
+  } finally {
+    client.release();
   }
 }
 
