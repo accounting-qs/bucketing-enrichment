@@ -1406,6 +1406,9 @@
 
 .bucket-tree__item--general { opacity: 0.7; }
 .bucket-tree__item--general.bucket-tree__item--active { opacity: 1; }
+.bucket-tree__item--empty { opacity: 0.4; }
+.bucket-tree__item--empty:hover { opacity: 0.7; }
+.bucket-tree__item--empty .bucket-tree__count { color: #64748b; }
 
 .bucket-tree__icon { font-size: 0.9rem; flex-shrink: 0; }
 

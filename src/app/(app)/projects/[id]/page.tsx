@@ -506,6 +506,21 @@ function AnalysisDetails({
 
   const dist = analysis.bucket_distribution || {};
 
+  // Build full 26-bucket list: ALL taxonomy buckets with counts (0 if none)
+  const { DEFAULT_TAXONOMY } = require("@/lib/defaultTaxonomy");
+  const fullBuckets: [string, number][] = useMemo(() => {
+    const bucketMap = new Map<string, number>();
+    // First add all taxonomy buckets with 0
+    for (const b of DEFAULT_TAXONOMY) {
+      bucketMap.set(b.bucket_name, 0);
+    }
+    // Then overlay actual counts
+    for (const [name, count] of Object.entries(dist)) {
+      bucketMap.set(name, count as number);
+    }
+    return Array.from(bucketMap.entries()).sort(([, a], [, b]) => b - a);
+  }, [dist]);
+
   const fetchRows = useCallback(async (p: number, bucket: string) => {
     setLoadingRows(true);
     try {
@@ -599,13 +614,13 @@ function AnalysisDetails({
               <span className="bucket-tree__name">All</span>
               <span className="bucket-tree__count">{totalProcessed}</span>
             </button>
-            {sorted.map(([bucket, count]) => (
+            {fullBuckets.map(([bucket, count]) => (
               <button
                 key={bucket}
-                className={`bucket-tree__item ${activeBucket === bucket ? "bucket-tree__item--active" : ""} ${bucket === "General Industry" ? "bucket-tree__item--general" : ""}`}
+                className={`bucket-tree__item ${activeBucket === bucket ? "bucket-tree__item--active" : ""} ${bucket === "General Industry" ? "bucket-tree__item--general" : ""} ${count === 0 ? "bucket-tree__item--empty" : ""}`}
                 onClick={() => handleBucketClick(bucket)}
               >
-                <span className="bucket-tree__icon">{bucket === "General Industry" ? "📁" : "📄"}</span>
+                <span className="bucket-tree__icon">{bucket === "General Industry" ? "📁" : count > 0 ? "📄" : "📋"}</span>
                 <span className="bucket-tree__name">{bucket}</span>
                 <span className="bucket-tree__count">{count}</span>
               </button>
@@ -648,11 +663,19 @@ function AnalysisDetails({
                           <td style={{ position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", fontVariantNumeric: "tabular-nums" }}>
                             {row.row_index + 1}
                           </td>
-                          {csvColumns.map((col: string) => (
-                            <td key={col} style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {parsed[col] || ""}
-                            </td>
-                          ))}
+                          {csvColumns.map((col: string) => {
+                            const val = parsed[col] || "";
+                            const isUrl = /^https?:\/\/|^www\./i.test(val);
+                            return (
+                              <td key={col} style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {isUrl ? (
+                                  <a href={val.startsWith("http") ? val : `https://${val}`} target="_blank" rel="noopener noreferrer" style={{ color: "#10b981", textDecoration: "none" }}>
+                                    {val}
+                                  </a>
+                                ) : val}
+                              </td>
+                            );
+                          })}
                           <td>
                             <span className={`bucket-tag ${row.bucket_name === "General Industry" ? "bucket-tag--general" : ""}`}>
                               {row.bucket_name}

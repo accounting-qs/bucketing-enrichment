@@ -29,7 +29,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Companies involved in the B2B production of physical goods, industrial equipment, or materials.",
     direct_ancestor: "Industrial & Operations",
     root_category: "Industrial",
-    include: ["manufacturing", "manufacturer", "industrial production", "fabrication", "machining", "OEM", "industrial automation", "industrial services", "industrial equipment", "carbon capture", "electrochemical", "chemical processing"],
+    include: ["manufacturing", "manufacturer", "industrial production", "fabrication", "machining", "OEM", "industrial automation", "industrial services", "industrial equipment", "carbon capture", "electrochemical", "chemical processing", "electrical manufacturing", "communication equipment", "electronics manufacturer", "semiconductor"],
     exclude: ["software for manufacturing", "consulting for manufacturing", "consumer handmade goods"],
     example_strings: ["Custom metal fabrication and manufacturing", "Industrial equipment manufacturer", "Precision machining and manufacturing services", "Electronics manufacturing services"]
   },
@@ -38,7 +38,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Organizations operating for public benefit, advocacy, or industry representation rather than profit.",
     direct_ancestor: "Non-Profit & Public Sector",
     root_category: "Non-Profit",
-    include: ["non-profit", "not-for-profit", "foundation", "association", "advocacy organization", "charity", "nonprofit", "community land trust", "social enterprise", "community development", "youth development", "charitable", "501c"],
+    include: ["non-profit", "not-for-profit", "foundation", "association", "advocacy organization", "charity", "nonprofit", "community land trust", "social enterprise", "community development", "youth development", "charitable", "501c", "financial literacy", "civic engagement", "political", "campaign", "government affairs", "public policy", "mission-driven"],
     exclude: ["for-profit social enterprise", "commercial business"],
     example_strings: ["Nonprofit broadband advocacy organization", "Industry trade association", "Charitable foundation for education", "Global non-profit organization"]
   },
@@ -92,7 +92,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Firms providing design, engineering, and construction services for the built environment.",
     direct_ancestor: "Industrial & Operations",
     root_category: "Industrial",
-    include: ["architecture", "civil engineering", "structural engineering", "general contractor", "construction management", "design-build"],
+    include: ["architecture", "civil engineering", "structural engineering", "general contractor", "construction management", "design-build", "remodeling", "renovation", "home improvement", "roofing", "plumbing", "HVAC", "building construction", "infrastructure development", "electrical contractor", "mechanical contractor"],
     exclude: ["software for construction", "residential interior design", "handyman"],
     example_strings: ["Architecture and engineering firm", "Civil engineering consultants", "Commercial general contractor", "Engineering and construction services"]
   },
@@ -110,7 +110,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Software platforms designed to improve general business workflows, operations, and productivity.",
     direct_ancestor: "Technology & Software",
     root_category: "SaaS / Software",
-    include: ["b2b saas", "workflow automation", "productivity software", "collaboration platform", "enterprise software", "management platform"],
+    include: ["b2b saas", "workflow automation", "productivity software", "collaboration platform", "enterprise software", "management platform", "trade-in", "trade in solutions", "refurbished", "ecommerce platform", "inventory management"],
     exclude: ["fintech saas", "proptech saas", "martech saas"],
     example_strings: ["B2B SaaS platform for workflow automation", "Cloud-based collaboration software", "Enterprise productivity platform", "Business management software"]
   },
@@ -128,7 +128,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Agencies focused on brand identity, design, communications, and public relations.",
     direct_ancestor: "Marketing & Creative Services",
     root_category: "Agencies",
-    include: ["branding agency", "creative agency", "pr agency", "public relations", "strategic communications", "design studio"],
+    include: ["branding agency", "creative agency", "pr agency", "public relations", "strategic communications", "design studio", "personal branding", "branding", "creative services", "brand strategy", "communications agency", "media relations"],
     exclude: ["digital marketing", "seo agency", "web development"],
     example_strings: ["Creative branding agency", "Strategic communications and PR firm", "Design and innovation studio", "Brand strategy consultancy"]
   },
@@ -137,7 +137,7 @@ export const DEFAULT_TAXONOMY: BucketDefinition[] = [
     description: "Software platforms specialized in data processing, business intelligence, and artificial intelligence applications.",
     direct_ancestor: "Technology & Software",
     root_category: "SaaS / Software",
-    include: ["data analytics", "ai platform", "business intelligence", "machine learning software", "big data"],
+    include: ["data analytics", "ai platform", "business intelligence", "machine learning software", "big data", "enterprise ai", "ai adoption", "artificial intelligence", "ai solutions", "predictive analytics", "data science"],
     exclude: ["data entry services", "general it consulting"],
     example_strings: ["AI-powered data analytics platform", "Predictive intelligence software", "Big data management solution", "Business intelligence platform"]
   },
