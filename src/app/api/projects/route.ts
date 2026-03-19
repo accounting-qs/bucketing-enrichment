@@ -3,25 +3,35 @@ import { query, getOne, execute } from "@/lib/db";
 
 // GET all projects
 export async function GET() {
-  const projects = await query(
-    `SELECT p.*, 
-       (SELECT COUNT(*) FROM workbooks w WHERE w.project_id = p.id) as workbook_count,
-       (SELECT COUNT(*) FROM analyses a WHERE a.project_id = p.id) as analysis_count
-     FROM projects p 
-     ORDER BY p.updated_at DESC`
-  );
-  return NextResponse.json({ projects });
+  try {
+    const projects = await query(
+      `SELECT p.*, 
+         (SELECT COUNT(*) FROM workbooks w WHERE w.project_id = p.id) as workbook_count,
+         (SELECT COUNT(*) FROM analyses a WHERE a.project_id = p.id) as analysis_count
+       FROM projects p 
+       ORDER BY p.updated_at DESC`
+    );
+    return NextResponse.json({ projects });
+  } catch (error) {
+    console.error("GET /api/projects error:", error);
+    return NextResponse.json({ error: "Database error", details: String(error) }, { status: 500 });
+  }
 }
 
 // POST create project
 export async function POST(req: NextRequest) {
-  const { name, description } = await req.json();
-  if (!name?.trim()) {
-    return NextResponse.json({ error: "Name is required" }, { status: 400 });
+  try {
+    const { name, description } = await req.json();
+    if (!name?.trim()) {
+      return NextResponse.json({ error: "Name is required" }, { status: 400 });
+    }
+    const result = await query(
+      "INSERT INTO projects (name, description) VALUES ($1, $2) RETURNING *",
+      [name, description || null]
+    );
+    return NextResponse.json({ project: result[0] }, { status: 201 });
+  } catch (error) {
+    console.error("POST /api/projects error:", error);
+    return NextResponse.json({ error: "Database error", details: String(error) }, { status: 500 });
   }
-  const result = await query(
-    "INSERT INTO projects (name, description) VALUES ($1, $2) RETURNING *",
-    [name, description || null]
-  );
-  return NextResponse.json({ project: result[0] }, { status: 201 });
 }
