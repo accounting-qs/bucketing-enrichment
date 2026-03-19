@@ -65,10 +65,6 @@ function classifyOne(
     };
   }
 
-  // Build search strings: primary column + all other columns
-  const allVals = Object.values(allColumns).filter(Boolean).map(v => v.toLowerCase().trim());
-  const combinedLower = allVals.join(" ");
-
   const scores: { bucket: BucketDefinition; score: number; matchedTerms: string[] }[] = [];
 
   for (const bucket of taxonomy) {
@@ -87,33 +83,25 @@ function classifyOne(
     }
     if (excluded) continue;
 
-    // Score include terms with word-level matching
+    // Score include terms with word-level matching — PRIMARY column ONLY
     for (const term of bucket.include) {
       const termLower = term.toLowerCase();
+      const wordCount = Math.max(1, termLower.split(/\s+/).length);
 
       // Primary value — exact phrase match (highest weight)
       if (exactPhrasePresent(primaryLower, termLower)) {
-        const wordCount = Math.max(1, termLower.split(/\s+/).length);
-        score += wordCount * 4; // Exact phrase = 4x per word
+        score += wordCount >= 2 ? wordCount * 4 : 2; // Multi-word exact = 4x, single-word = 2x
         matchedTerms.push(`✓ "${term}"`);
       }
-      // Primary value — all words present (high weight)
-      else if (allWordsPresent(primaryLower, termLower)) {
-        const wordCount = Math.max(1, termLower.split(/\s+/).length);
-        score += wordCount * 3; // All words = 3x per word
+      // Primary value — all words present (high weight, multi-word only)
+      else if (wordCount >= 2 && allWordsPresent(primaryLower, termLower)) {
+        score += wordCount * 3; // All words present = 3x per word
         matchedTerms.push(`≈ "${term}"`);
       }
-      // Combined columns — exact phrase (medium weight)
-      else if (exactPhrasePresent(combinedLower, termLower)) {
-        const wordCount = Math.max(1, termLower.split(/\s+/).length);
-        score += wordCount * 2; // Secondary exact = 2x
-        matchedTerms.push(`~"${term}"`);
-      }
-      // Combined columns — all words present (lower weight)
-      else if (allWordsPresent(combinedLower, termLower)) {
-        const wordCount = Math.max(1, termLower.split(/\s+/).length);
-        score += wordCount; // Secondary words = 1x
-        matchedTerms.push(`~≈"${term}"`);
+      // Single-word keyword — low weight, only if prominent
+      else if (wordCount === 1 && primaryLower.includes(termLower)) {
+        score += 1; // Single word = 1x
+        matchedTerms.push(`~ "${term}"`);
       }
     }
 

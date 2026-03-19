@@ -1,14 +1,11 @@
 /**
- * DuckDB Classification Engine
+ * DuckDB Classification Engine v2
  *
- * Uses DuckDB in-memory SQL for fast, accurate keyword matching.
- * Replaces the pure-JS classifier with SQL LIKE + word-level matching.
+ * CRITICAL FIX: Uses a scores table with ROW_NUMBER() to pick BEST bucket
+ * per row instead of "first match wins" UPDATE approach.
  *
- * Architecture:
- * 1. Load CSV rows into DuckDB in-memory table
- * 2. For each bucket, run SQL to check if ANY keyword's words appear in the text
- * 3. Score and rank matches
- * 4. Return classified results
+ * Only uses the SELECTED COLUMN for matching (not metadata columns like
+ * lead_list_name which could contaminate results).
  */
 
 import { DuckDBInstance } from "@duckdb/node-api";
@@ -24,8 +21,7 @@ export interface DuckDBClassificationResult {
 }
 
 /**
- * Classify rows using DuckDB SQL-based matching.
- * Much faster and more accurate than pure JS for large datasets.
+ * Classify rows using DuckDB SQL-based "best match wins" scoring.
  */
 export async function classifyWithDuckDB(
   rows: Record<string, string>[],
@@ -36,98 +32,118 @@ export async function classifyWithDuckDB(
   const conn = await instance.connect();
 
   try {
-    // 1. Create contacts table with all columns + an idx column
-    const allKeys = rows.length > 0 ? Object.keys(rows[0]) : [];
-    const columnDefs = allKeys.map((k, i) => `col_${i} VARCHAR`).join(", ");
+    // 1. Create contacts table — only store idx and the selected column text
+    await conn.run(`CREATE TABLE contacts (idx INTEGER, primary_text VARCHAR)`);
 
-    await conn.run(`CREATE TABLE contacts (idx INTEGER, combined_text VARCHAR, primary_text VARCHAR, ${columnDefs}, bucket VARCHAR, score DOUBLE, reason VARCHAR)`);
+    // 2. Create scoring table — all bucket scores for all rows
+    await conn.run(`CREATE TABLE scores (idx INTEGER, bucket_name VARCHAR, score DOUBLE, reason VARCHAR)`);
 
-    // 2. Insert all rows
+    // 3. Insert rows — ONLY the selected column, not metadata columns
     for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const primaryVal = (row[selectedColumn] || "").trim();
-      // Combine all column values for broader matching
-      const combined = Object.values(row).filter(Boolean).join(" ").trim();
-
-      const colValues = allKeys.map(k => escapeSql(row[k] || "")).join("', '");
-
+      const primaryVal = (rows[i][selectedColumn] || "").toLowerCase().trim();
       await conn.run(
-        `INSERT INTO contacts VALUES (${i}, '${escapeSql(combined.toLowerCase())}', '${escapeSql(primaryVal.toLowerCase())}', '${colValues}', NULL, 0, NULL)`
+        `INSERT INTO contacts VALUES (${i}, '${escapeSql(primaryVal)}')`
       );
     }
 
-    // 3. For each bucket, score rows using SQL word matching
+    // 4. For EACH bucket, INSERT scores into the scores table (not UPDATE)
     const activeBuckets = taxonomy.filter(b => b.bucket_name !== "General Industry");
 
     for (const bucket of activeBuckets) {
       if (bucket.include.length === 0) continue;
 
-      // Build SQL conditions for include terms using word-level matching
-      const includeConditions: string[] = [];
+      // Build scoring expressions for include terms
+      const scoreParts: string[] = [];
+      const reasonParts: string[] = [];
+
       for (const term of bucket.include) {
-        const words = term.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+        const termLower = term.toLowerCase();
+        const words = termLower.split(/\s+/).filter(w => w.length > 1);
         if (words.length === 0) continue;
 
-        // All words must be present in the text
-        const wordChecks = words.map(w => `primary_text LIKE '%${escapeSql(w)}%'`).join(" AND ");
-        const combinedChecks = words.map(w => `combined_text LIKE '%${escapeSql(w)}%'`).join(" AND ");
-
-        // Primary match (higher score) or combined match (lower score)
-        includeConditions.push(`CASE WHEN (${wordChecks}) THEN ${words.length * 3} WHEN (${combinedChecks}) THEN ${words.length} ELSE 0 END`);
+        if (words.length >= 2) {
+          // Multi-word keyword: exact phrase = 4x per word, all words present = 3x
+          const exactCheck = `primary_text LIKE '%${escapeSql(termLower)}%'`;
+          const allWordsCheck = words.map(w => `primary_text LIKE '%${escapeSql(w)}%'`).join(" AND ");
+          scoreParts.push(`CASE WHEN (${exactCheck}) THEN ${words.length * 4} WHEN (${allWordsCheck}) THEN ${words.length * 3} ELSE 0 END`);
+          reasonParts.push(termLower);
+        } else {
+          // Single-word keyword: lower weight (1x), match with word boundaries
+          const word = words[0];
+          // Only count single-word if text contains it prominently
+          const check = `primary_text LIKE '%${escapeSql(word)}%'`;
+          scoreParts.push(`CASE WHEN (${check}) THEN 1 ELSE 0 END`);
+        }
       }
 
-      // Build exclude conditions
+      if (scoreParts.length === 0) continue;
+
+      // Build exclude clause
       const excludeConditions: string[] = [];
       for (const term of bucket.exclude) {
         const words = term.toLowerCase().split(/\s+/).filter(w => w.length > 1);
         if (words.length === 0) continue;
-        const wordChecks = words.map(w => `primary_text LIKE '%${escapeSql(w)}%'`).join(" AND ");
-        excludeConditions.push(`(${wordChecks})`);
+        const allWordsCheck = words.map(w => `primary_text LIKE '%${escapeSql(w)}%'`).join(" AND ");
+        excludeConditions.push(`(${allWordsCheck})`);
       }
-
       const excludeClause = excludeConditions.length > 0
         ? `AND NOT (${excludeConditions.join(" OR ")})`
         : "";
 
-      // Calculate total score for this bucket
-      const scoreExpr = includeConditions.join(" + ");
+      const scoreExpr = scoreParts.join(" + ");
+      const reasonStr = escapeSql(reasonParts.slice(0, 3).join(", "));
 
-      // Update rows that have a HIGHER score for this bucket than their current score
+      // INSERT scores for ALL rows that match this bucket (not UPDATE!)
       await conn.run(`
-        UPDATE contacts
-        SET bucket = '${escapeSql(bucket.bucket_name)}',
-            score = (${scoreExpr}),
-            reason = 'DuckDB match: ${escapeSql(bucket.include.slice(0, 3).join(", "))}'
-        WHERE bucket IS NULL
-          AND (${scoreExpr}) > 0
-          AND (${scoreExpr}) >= score
-          ${excludeClause}
+        INSERT INTO scores
+        SELECT idx, '${escapeSql(bucket.bucket_name)}', (${scoreExpr}), 'Matched: ${reasonStr}'
+        FROM contacts
+        WHERE (${scoreExpr}) > 0
+        ${excludeClause}
       `);
     }
 
-    // 4. Read results using chunk-based API
-    const result = await conn.run("SELECT idx, primary_text, bucket, score FROM contacts ORDER BY idx");
+    // 5. Find BEST bucket per row using ROW_NUMBER
+    // This ensures each row goes to the HIGHEST-scoring bucket
+    const bestResult = await conn.run(`
+      SELECT c.idx, c.primary_text,
+        COALESCE(best.bucket_name, 'General Industry') as bucket,
+        COALESCE(best.score, 0) as score,
+        COALESCE(best.reason, 'No keyword matches found') as reason
+      FROM contacts c
+      LEFT JOIN (
+        SELECT idx, bucket_name, score, reason,
+          ROW_NUMBER() OVER (PARTITION BY idx ORDER BY score DESC) as rn
+        FROM scores
+      ) best ON c.idx = best.idx AND best.rn = 1
+      ORDER BY c.idx
+    `);
+
     const classified: DuckDBClassificationResult[] = [];
 
-    for (let ci = 0; ci < result.chunkCount; ci++) {
-      const chunk = result.getChunk(ci);
+    for (let ci = 0; ci < bestResult.chunkCount; ci++) {
+      const chunk = bestResult.getChunk(ci);
       const chunkRows = chunk.getRows();
       for (const r of chunkRows) {
         const idx = Number(r[0]);
         const primaryText = String(r[1] || "");
-        const bucketName = r[2] ? String(r[2]) : "General Industry";
+        const bucketName = String(r[2] || "General Industry");
         const score = Number(r[3] || 0);
+        const reason = String(r[4] || "No keyword matches found");
 
-        const maxScore = 30; // reasonable max for normalization
+        // Skip empty/error values
+        const isError = !primaryText || primaryText === "scrape error" || primaryText === "error" || primaryText === "n/a";
+
+        const maxScore = 20;
         const confidence = Math.min(1, score / maxScore);
 
         classified.push({
           index: idx,
           value: rows[idx]?.[selectedColumn] || primaryText,
-          bucket: bucketName,
-          confidence: Math.max(confidence, bucketName === "General Industry" ? 0.1 : 0.3),
-          method: bucketName === "General Industry" || confidence < 0.2 ? "needs_ai" : "deterministic",
-          reason: bucketName === "General Industry" ? "No keyword matches found" : `DuckDB score: ${score}`,
+          bucket: isError ? "General Industry" : bucketName,
+          confidence: isError ? 0 : Math.max(confidence, bucketName === "General Industry" ? 0.1 : 0.3),
+          method: isError || bucketName === "General Industry" || confidence < 0.15 ? "needs_ai" : "deterministic",
+          reason: isError ? "Empty or error value" : reason,
         });
       }
     }
@@ -138,20 +154,19 @@ export async function classifyWithDuckDB(
   }
 }
 
-/**
- * Escape single quotes for SQL strings
- */
 function escapeSql(str: string): string {
   return str.replace(/'/g, "''").replace(/\\/g, "\\\\");
 }
 
 /**
- * Apply minimum bucket threshold (reuses same logic, works on DuckDB results too)
+ * Apply minimum bucket threshold — merge small buckets into General Industry
  */
 export function applyBucketThresholdDuckDB(
   results: DuckDBClassificationResult[],
   minThreshold: number
 ): DuckDBClassificationResult[] {
+  if (minThreshold <= 1) return results; // No merging if threshold is 1 or less
+
   const counts: Record<string, number> = {};
   for (const r of results) {
     counts[r.bucket] = (counts[r.bucket] || 0) + 1;

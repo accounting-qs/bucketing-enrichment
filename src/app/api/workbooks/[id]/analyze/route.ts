@@ -52,7 +52,7 @@ export async function POST(
       model,
       analysisMode = "ai_only",
       rowLimit,
-      minBucketThreshold = 5,
+      minBucketThreshold = 1,
     } = await req.json();
 
     if (!column || !projectId) {
