@@ -1,28 +1,19 @@
 import { NextResponse } from "next/server";
-import db from "@/lib/db";
+import { query } from "@/lib/db";
 
+// GET all analyses with project and workbook info
 export async function GET() {
-    try {
-        // Fetch completed historical analyses
-        const analyses = await db.query(`
-            SELECT a.id, a.workbookId, a.selectedColumn, a.createdAt, a.stats, w.filename 
-            FROM analyses a
-            LEFT JOIN workbooks w ON w.id = a.workbookId
-            ORDER BY a.createdAt DESC
-            LIMIT 50
-        `);
+  const analyses = await query(
+    `SELECT 
+       a.*,
+       p.name as project_name,
+       w.filename as workbook_filename
+     FROM analyses a
+     LEFT JOIN projects p ON p.id = a.project_id
+     LEFT JOIN workbooks w ON w.id = a.workbook_id
+     ORDER BY a.created_at DESC
+     LIMIT 100`
+  );
 
-        // Fetch background jobs to see real-time failures or successes
-        const jobs = await db.query(`
-            SELECT id, status, progress, message, updatedAt, resultId
-            FROM jobs
-            ORDER BY updatedAt DESC
-            LIMIT 50
-        `);
-
-        return NextResponse.json({ analyses, jobs });
-    } catch (error: any) {
-        console.error("Fetch history error:", error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+  return NextResponse.json({ analyses });
 }

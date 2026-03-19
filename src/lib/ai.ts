@@ -1,276 +1,297 @@
-import { OpenAI } from "openai";
+import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Anthropic from "@anthropic-ai/sdk";
+import type { AIProvider, BucketDefinition } from "@/types";
+import { buildClassificationSystemPrompt, buildBatchUserPrompt } from "./prompts";
 
-export interface TaxonomyNode {
-  name: string;
-  description?: string;
-  children: TaxonomyNode[];
-  isAiSuggested?: boolean;
+// ============================================================
+// Provider initialization
+// ============================================================
+
+function getOpenAI(): OpenAI {
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
-export async function proposeTaxonomy(
-  columnName: string,
-  sampleValues: Array<{ value: string; count: number }>,
-  providerInput: string,
-  guide?: any[] | null,
-  customApiKey?: string
-): Promise<TaxonomyNode[]> {
-  const prompt = `
-    You are a Strategic Data Architect. I have a dataset with a column named "${columnName}".
-    I need you to propose a hierarchical TAXONOMY (Parent -> Child -> Leaf) to categorize this data.
+function getGemini(): GoogleGenerativeAI {
+  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+}
 
-    SAMPLE VALUES (Top 500):
-    ${JSON.stringify(sampleValues.slice(0, 500))}
+function getClaude(): Anthropic {
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+}
 
-    TAXONOMY RULES:
-    1. ${guide ? "CRITICAL STRICT RULE: You MUST ONLY use the exact taxonomy buckets provided in the GUIDE. DO NOT, under any circumstances, create, hallucinate, or suggest any new categories, sub-categories, or parent buckets." : "Create a logical hierarchy from scratch."}
-    2. Focus on BROAD categories (e.g., "Finance") breaking down into specific niches (e.g., "Investment Banking").
-    3. Propose a nested JSON structure.
-    4. If using a guide, your output must exactly match the provided guide structure. Do not mark anything as aiSuggested.
+// ============================================================
+// Classification result types
+// ============================================================
 
-    ${guide ? `USER GUIDE (JSON Schema): ${JSON.stringify(guide)}` : ""}
+export interface ClassificationResult {
+  index: number;
+  bucket_1: { name: string; score: number; reason: string };
+  bucket_2: { name: string; score: number; reason: string };
+  bucket_3: { name: string; score: number; reason: string };
+  generic: boolean;
+  disqualified: boolean;
+}
 
-    OUTPUT FORMAT (JSON ARRAY):
-    [
-      {
-        "name": "Parent Category",
-        "description": "Optional description",
-        "children": [
-          { "name": "Sub-Category", "children": [] }
-        ],
-        "isAiSuggested": false
-      }
-    ]
+export interface BatchResult {
+  results: ClassificationResult[];
+  tokenUsage: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
 
-    Return ONLY valid JSON.
-  `;
+// ============================================================
+// Main classification function
+// ============================================================
 
-  const commonSystem = "Return JSON only. No markdown. No text outside the array.";
+/**
+ * Classify a batch of values using AI
+ * @param batch Array of { index, value } — the original row index and the value to classify
+ * @param taxonomy Full taxonomy (25+1 default + custom)
+ * @param provider AI provider
+ * @param model Optional specific model name
+ */
+export async function classifyBatch(
+  batch: { index: number; value: string }[],
+  taxonomy: BucketDefinition[],
+  provider: AIProvider,
+  model?: string
+): Promise<BatchResult> {
+  const systemPrompt = buildClassificationSystemPrompt(taxonomy);
+  const userPrompt = buildBatchUserPrompt(batch);
 
-  try {
-    let provider = providerInput;
-    let actualModel = "";
-    if (providerInput.includes(':')) {
-      [provider, actualModel] = providerInput.split(':');
+  let responseText = "";
+  let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
+  switch (provider) {
+    case "gemini": {
+      const result = await classifyWithGemini(systemPrompt, userPrompt, model);
+      responseText = result.text;
+      tokenUsage = result.tokenUsage;
+      break;
     }
-
-    const apiKey = customApiKey || getApiKey(provider);
-    if (!apiKey) throw new Error(`Missing API Key for provider: ${provider}`);
-
-    let responseText = "";
-    if (provider === "openai") {
-      const openai = new OpenAI({ apiKey });
-      const res = await openai.chat.completions.create({
-        model: actualModel || "gpt-4o",
-        messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
-        response_format: { type: "json_object" }
-      });
-      responseText = res.choices[0].message.content || "[]";
-    } else if (provider === "openrouter") {
-      const openrouter = new OpenAI({ 
-        baseURL: "https://openrouter.ai/api/v1", 
-        apiKey 
-      });
-      const res = await openrouter.chat.completions.create({
-        model: actualModel || "meta-llama/llama-3.3-70b-instruct",
-        messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
-        response_format: { type: "json_object" }
-      });
-      responseText = res.choices[0].message.content || "[]";
-    } else if (provider === "claude") {
-      const anthropic = new Anthropic({ apiKey });
-      const res = await anthropic.messages.create({
-        model: actualModel || "claude-3-7-sonnet-latest",
-        max_tokens: 4000,
-        messages: [{ role: "user", content: prompt + "\n\n" + commonSystem }],
-      });
-      responseText = res.content[0].type === 'text' ? res.content[0].text : '[]';
-    } else {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: actualModel || "gemini-2.5-flash" });
-      const res = await model.generateContent(prompt + "\n\n" + commonSystem);
-      responseText = res.response.text();
+    case "openai": {
+      const result = await classifyWithOpenAI(systemPrompt, userPrompt, model);
+      responseText = result.text;
+      tokenUsage = result.tokenUsage;
+      break;
     }
-
-    const cleanJson = responseText.replace(/```json\n?|\n?```/g, "").trim();
-    const result = JSON.parse(cleanJson);
-    return Array.isArray(result) ? result : (result.buckets || []);
-  } catch (err) {
-    console.error(">>> PROPOSE TAXONOMY ERROR:", err);
-    return [];
+    case "claude": {
+      const result = await classifyWithClaude(systemPrompt, userPrompt, model);
+      responseText = result.text;
+      tokenUsage = result.tokenUsage;
+      break;
+    }
+    case "openrouter": {
+      const result = await classifyWithOpenRouter(systemPrompt, userPrompt, model);
+      responseText = result.text;
+      tokenUsage = result.tokenUsage;
+      break;
+    }
+    default:
+      throw new Error(`Unknown AI provider: ${provider}`);
   }
+
+  // Parse the JSON response
+  const results = parseClassificationResponse(responseText, batch);
+
+  return { results, tokenUsage };
 }
 
-export async function mapBatchToTaxonomy(
-  columnName: string,
-  batchValues: string[],
-  parentBuckets: TaxonomyNode[],
-  providerInput: string,
-  customApiKey?: string
-): Promise<any> {
-  // Simplify the tree for the prompt to save tokens, just sending names structure
-  const simplifiedStructure = JSON.stringify(parentBuckets, (key, value) => {
-    if (key === 'description' || key === 'isAiSuggested') return undefined;
-    return value;
+// ============================================================
+// Provider-specific implementations
+// ============================================================
+
+async function classifyWithGemini(
+  systemPrompt: string,
+  userPrompt: string,
+  model?: string
+) {
+  const gemini = getGemini();
+  const m = gemini.getGenerativeModel({
+    model: model || "gemini-2.5-flash",
+    systemInstruction: systemPrompt,
   });
 
-  const prompt = `
-    You are matching a batch of company records or specific dimension values to an existing industry taxonomy.
-    
-    TAXONOMY STRUCTURE ALREADY APPROVED BY USER:
-    ${simplifiedStructure}
+  const result = await m.generateContent(userPrompt);
+  const response = result.response;
 
-    BATCH VALUES TO MAP:
-    ${JSON.stringify(batchValues)}
-
-    GOAL:
-    1. CRITICAL: You MUST map EVERY single value in the "BATCH VALUES TO MAP" list. Leave no value behind.
-    2. Try to map each value accurately to the taxonomy above.
-    3. BEST FIT: Even if a value doesn't match 100%, assign it to the Parent/Category that makes the most sense.
-    4. MUST EXACT MATCH: The bucket_3, bucket_2, and bucket_1 fields MUST match the actual taxonomy paths above perfectly (bucket_3 = root, bucket_1 = leaf).
-
-    OUTPUT FORMAT: You MUST return a JSON object exactly following this structure, with no markdown wrappers or preambles.
-    {
-      "mappings": [
-        {
-          "value": "Exact String from Batch",
-          "bucket_3": "Root Category (must exact match taxonomy)",
-          "bucket_2": "Parent Category (must exact match taxonomy)",
-          "bucket_1": "Leaf Category (must exact match taxonomy)",
-          "reason": "Very brief reasoning for classification",
-          "confidence": 0.95,
-          "is_generic": false,
-          "is_disqualified": false
-        }
-      ]
-    }
-  `;
-
-  const commonSystem = "Return JSON only. Strict JSON formatting limit.";
-
-  try {
-    let provider = providerInput;
-    let actualModel = "";
-    if (providerInput.includes(':')) {
-      [provider, actualModel] = providerInput.split(':');
-    }
-
-    const apiKey = customApiKey || getApiKey(provider);
-    if (!apiKey) throw new Error(`Missing API Key for provider: ${provider}`);
-
-    let responseText = "";
-    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-
-    if (provider === "openai") {
-      const openai = new OpenAI({ apiKey });
-      const res = await openai.chat.completions.create({
-        model: actualModel || "gpt-4o",
-        messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
-        response_format: { type: "json_object" }
-      });
-      responseText = res.choices[0].message.content || "{}";
-      if (res.usage) {
-          usage.promptTokens = res.usage.prompt_tokens;
-          usage.completionTokens = res.usage.completion_tokens;
-          usage.totalTokens = res.usage.total_tokens;
-      }
-    } else if (provider === "openrouter") {
-      const openrouter = new OpenAI({ 
-        baseURL: "https://openrouter.ai/api/v1", 
-        apiKey 
-      });
-      const res = await openrouter.chat.completions.create({
-        model: actualModel || "meta-llama/llama-3.3-70b-instruct",
-        messages: [{ role: "system", content: commonSystem }, { role: "user", content: prompt }],
-        response_format: { type: "json_object" }
-      });
-      responseText = res.choices[0].message.content || "{}";
-      if (res.usage) {
-          usage.promptTokens = res.usage.prompt_tokens;
-          usage.completionTokens = res.usage.completion_tokens;
-          usage.totalTokens = res.usage.total_tokens;
-      }
-    } else if (provider === "claude") {
-      const anthropic = new Anthropic({ apiKey });
-      const res = await anthropic.messages.create({
-        model: actualModel || "claude-3-7-sonnet-latest",
-        max_tokens: 4000,
-        messages: [{ role: "user", content: prompt + "\n\n" + commonSystem }],
-      });
-      responseText = res.content[0].type === 'text' ? res.content[0].text : '{}';
-      if (res.usage) {
-          usage.promptTokens = res.usage.input_tokens;
-          usage.completionTokens = res.usage.output_tokens;
-          usage.totalTokens = res.usage.input_tokens + res.usage.output_tokens;
-      }
-    } else {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: actualModel || "gemini-2.5-flash" });
-      const res = await model.generateContent(prompt + "\n\n" + commonSystem);
-      responseText = res.response.text();
-      if (res.response.usageMetadata) {
-          usage.promptTokens = res.response.usageMetadata.promptTokenCount;
-          usage.completionTokens = res.response.usageMetadata.candidatesTokenCount;
-          usage.totalTokens = res.response.usageMetadata.totalTokenCount;
-      }
-    }
-
-    const cleanJson = responseText.replace(/```json\n?|\n?```/g, "").trim();
-    const result = JSON.parse(cleanJson);
-    result.usage = usage;
-    
-    // Polyfill the new strict schema into the old nested array path structure for compatibility
-    if (result.mappings && Array.isArray(result.mappings)) {
-      result.mappings = result.mappings.map((m: any) => {
-        let path: string[] = [];
-        if (m.is_disqualified || m.is_generic || (!m.bucket_3 && !m.bucket_2 && !m.bucket_1)) {
-           // Provide a graceful fallback
-           path = ["General / Unformatted"];
-        } else {
-           // Construct valid path from top to bottom
-           if (m.bucket_3) path.push(m.bucket_3);
-           if (m.bucket_2) path.push(m.bucket_2);
-           if (m.bucket_1) path.push(m.bucket_1);
-        }
-        
-        return {
-           value: m.value,
-           path: path,
-           reason: m.reason || "",
-           confidence: m.confidence || 1.0,
-           is_generic: !!m.is_generic,
-           is_disqualified: !!m.is_disqualified,
-           original_bucket_1: m.bucket_1
-        };
-      });
-    }
-
-    return result;
-  } catch (err) {
-    console.error(">>> BATCH MAPPING ERROR:", err);
-    throw err;
-  }
-}
-
-function getApiKey(provider: string) {
-  if (provider === "openai") return process.env.OPENAI_API_KEY;
-  if (provider === "claude") return process.env.ANTHROPIC_API_KEY;
-  return process.env.GEMINI_API_KEY;
-}
-
-// Keeping the original function signature for compatibility but disabling usage.
-export async function runAIBucketing(
-  columnName: string,
-  sampleValues: Array<{ value: string; count: number }>,
-  provider: "gemini" | "openai" | "claude",
-  guide?: any[] | null
-): Promise<any> {
-  const buckets = await proposeTaxonomy(columnName, sampleValues, provider, guide);
-  // This legacy wrapper is likely deprecated by the new flow, returning basic structure
   return {
-    mappedBuckets: [],
-    suggestedBuckets: [],
-    proposedBuckets: buckets
+    text: response.text(),
+    tokenUsage: {
+      promptTokens: response.usageMetadata?.promptTokenCount || 0,
+      completionTokens: response.usageMetadata?.candidatesTokenCount || 0,
+      totalTokens: response.usageMetadata?.totalTokenCount || 0,
+    },
   };
+}
+
+async function classifyWithOpenAI(
+  systemPrompt: string,
+  userPrompt: string,
+  model?: string
+) {
+  const openai = getOpenAI();
+  const response = await openai.chat.completions.create({
+    model: model || "gpt-4o",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+  });
+
+  return {
+    text: response.choices[0]?.message?.content || "[]",
+    tokenUsage: {
+      promptTokens: response.usage?.prompt_tokens || 0,
+      completionTokens: response.usage?.completion_tokens || 0,
+      totalTokens: response.usage?.total_tokens || 0,
+    },
+  };
+}
+
+async function classifyWithClaude(
+  systemPrompt: string,
+  userPrompt: string,
+  model?: string
+) {
+  const claude = getClaude();
+  const response = await claude.messages.create({
+    model: model || "claude-sonnet-4-20250514",
+    max_tokens: 8192,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+
+  const textBlock = response.content.find((b) => b.type === "text");
+
+  return {
+    text: textBlock && "text" in textBlock ? textBlock.text : "[]",
+    tokenUsage: {
+      promptTokens: response.usage?.input_tokens || 0,
+      completionTokens: response.usage?.output_tokens || 0,
+      totalTokens:
+        (response.usage?.input_tokens || 0) +
+        (response.usage?.output_tokens || 0),
+    },
+  };
+}
+
+async function classifyWithOpenRouter(
+  systemPrompt: string,
+  userPrompt: string,
+  model?: string
+) {
+  const openai = new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY,
+  });
+
+  const response = await openai.chat.completions.create({
+    model: model || "meta-llama/llama-3.3-70b-instruct",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.1,
+  });
+
+  return {
+    text: response.choices[0]?.message?.content || "[]",
+    tokenUsage: {
+      promptTokens: response.usage?.prompt_tokens || 0,
+      completionTokens: response.usage?.completion_tokens || 0,
+      totalTokens: response.usage?.total_tokens || 0,
+    },
+  };
+}
+
+// ============================================================
+// Response parsing
+// ============================================================
+
+function parseClassificationResponse(
+  responseText: string,
+  batch: { index: number; value: string }[]
+): ClassificationResult[] {
+  let cleaned = responseText.trim();
+
+  // Strip markdown code blocks if present
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    console.error(">>> Failed to parse AI response as JSON:", cleaned.substring(0, 500));
+    // Return all as generic
+    return batch.map((item) => ({
+      index: item.index,
+      bucket_1: { name: "", score: 0, reason: "AI response parse error" },
+      bucket_2: { name: "", score: 0, reason: "" },
+      bucket_3: { name: "", score: 0, reason: "" },
+      generic: true,
+      disqualified: false,
+    }));
+  }
+
+  // Handle both array and object-with-results responses
+  let results: unknown[];
+  if (Array.isArray(parsed)) {
+    results = parsed;
+  } else if (parsed && typeof parsed === "object" && "results" in parsed) {
+    results = (parsed as { results: unknown[] }).results;
+  } else {
+    results = [parsed];
+  }
+
+  // Map to typed results, filling in missing indices
+  const resultMap = new Map<number, ClassificationResult>();
+
+  for (const item of results) {
+    const r = item as Record<string, unknown>;
+    const idx = (r.index as number) ?? 0;
+    const b1 = (r.bucket_1 || r.bucket1 || {}) as Record<string, unknown>;
+    const b2 = (r.bucket_2 || r.bucket2 || {}) as Record<string, unknown>;
+    const b3 = (r.bucket_3 || r.bucket3 || {}) as Record<string, unknown>;
+
+    resultMap.set(idx, {
+      index: idx,
+      bucket_1: {
+        name: String(b1.name || ""),
+        score: Number(b1.score || 0),
+        reason: String(b1.reason || ""),
+      },
+      bucket_2: {
+        name: String(b2.name || ""),
+        score: Number(b2.score || 0),
+        reason: String(b2.reason || ""),
+      },
+      bucket_3: {
+        name: String(b3.name || ""),
+        score: Number(b3.score || 0),
+        reason: String(b3.reason || ""),
+      },
+      generic: Boolean(r.generic),
+      disqualified: Boolean(r.disqualified),
+    });
+  }
+
+  // Ensure all batch items have a result
+  return batch.map((item) => {
+    const existing = resultMap.get(item.index);
+    if (existing) return existing;
+
+    // Missing from AI response — mark as generic
+    return {
+      index: item.index,
+      bucket_1: { name: "", score: 0, reason: "Missing from AI response" },
+      bucket_2: { name: "", score: 0, reason: "" },
+      bucket_3: { name: "", score: 0, reason: "" },
+      generic: true,
+      disqualified: false,
+    };
+  });
 }

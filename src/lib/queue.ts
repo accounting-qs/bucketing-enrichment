@@ -1,24 +1,34 @@
-import { Queue, ConnectionOptions } from 'bullmq';
-import IORedis from 'ioredis';
+import { Queue } from "bullmq";
+import IORedis from "ioredis";
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+let connection: IORedis | null = null;
+let queue: Queue | null = null;
 
-// Setup Redis connection options
-const connection = new IORedis(REDIS_URL, {
-    maxRetriesPerRequest: null, // Critical for BullMQ
-});
-
-// Define the Queue
-export const analyzeQueue = new Queue('workbook-analysis', {
-    connection,
-    defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-            type: 'exponential',
-            delay: 1000,
-        },
-        removeOnComplete: true,
+function getRedisConnection(): IORedis {
+  if (!connection) {
+    const redisUrl = process.env.REDIS_URL;
+    if (!redisUrl) {
+      throw new Error("REDIS_URL is not set");
     }
-});
+    connection = new IORedis(redisUrl, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+  }
+  return connection;
+}
 
-export default analyzeQueue;
+export function getAnalysisQueue(): Queue {
+  if (!queue) {
+    queue = new Queue("workbook-analysis", {
+      connection: getRedisConnection(),
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 50 },
+      },
+    });
+  }
+  return queue;
+}

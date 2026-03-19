@@ -1,132 +1,146 @@
-import { Pool } from 'pg';
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
+import { Pool, PoolClient } from "pg";
+import fs from "fs";
+import path from "path";
 
-const isProduction = process.env.NODE_ENV === 'production' || !!process.env.DATABASE_URL;
+// PostgreSQL-only — no more SQLite
+const DATABASE_URL = process.env.DATABASE_URL;
 
-let sqliteDb: any;
-let pgPool: Pool | null = null;
-
-if (isProduction) {
-  pgPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-      rejectUnauthorized: false
-    }
-  });
-
-  // Auto-create tables for Postgres if they don't exist
-  pgPool.query(`
-        CREATE TABLE IF NOT EXISTS workbooks (
-            id TEXT PRIMARY KEY,
-            filename TEXT,
-            uploadedAt TEXT,
-            columns TEXT,
-            rowCount INTEGER,
-            storagePath TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS analyses (
-            id TEXT PRIMARY KEY,
-            workbookId TEXT,
-            selectedColumn TEXT,
-            createdAt TEXT,
-            stats TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            status TEXT,
-            progress INTEGER DEFAULT 0,
-            message TEXT,
-            resultId TEXT,
-            updatedAt TEXT
-        );
-    `).then(() => console.log(">>> DB Migration Successful"))
-    .catch(err => console.error(">>> DB MIGRATION ERROR:", err));
-} else {
-  const DB_PATH = path.join(process.cwd(), 'data', 'demo.db');
-  if (!fs.existsSync(path.join(process.cwd(), 'data'))) {
-    fs.mkdirSync(path.join(process.cwd(), 'data'));
-  }
-  sqliteDb = new Database(DB_PATH);
-
-  // Initial SQLite schema
-  sqliteDb.exec(`
-        CREATE TABLE IF NOT EXISTS workbooks (
-            id TEXT PRIMARY KEY,
-            filename TEXT,
-            uploadedAt TEXT,
-            columns TEXT,
-            rowCount INTEGER,
-            storagePath TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS analyses (
-            id TEXT PRIMARY KEY,
-            workbookId TEXT,
-            selectedColumn TEXT,
-            createdAt TEXT,
-            stats TEXT,
-            FOREIGN KEY(workbookId) REFERENCES workbooks(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            status TEXT,
-            progress INTEGER DEFAULT 0,
-            message TEXT,
-            resultId TEXT,
-            updatedAt TEXT
-        );
-    `);
+if (!DATABASE_URL) {
+  console.warn(
+    ">>> WARNING: DATABASE_URL is not set. Database operations will fail."
+  );
 }
 
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL?.includes("render.com")
+    ? { rejectUnauthorized: false }
+    : undefined,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+});
+
+pool.on("error", (err) => {
+  console.error(">>> Unexpected PG pool error:", err);
+});
+
 /**
- * Universal query function that works for both SQLite (dev) and PG (prod)
+ * Run the schema migration on startup
  */
-export async function query(sql: string, params: any[] = []): Promise<any> {
-  if (pgPool) {
-    // Convert all ? to $1, $2, etc. for Postgres
-    let pgSql = sql;
-    let i = 1;
-    while (pgSql.includes('?')) {
-      pgSql = pgSql.replace('?', `$${i++}`);
+export async function runMigrations(): Promise<void> {
+  try {
+    const schemaPath = path.join(__dirname, "schema.sql");
+    let schemaSql: string;
+
+    try {
+      schemaSql = fs.readFileSync(schemaPath, "utf-8");
+    } catch {
+      // In production builds, __dirname may differ. Try process.cwd()
+      const altPath = path.join(process.cwd(), "src", "lib", "schema.sql");
+      schemaSql = fs.readFileSync(altPath, "utf-8");
     }
-    const res = await pgPool.query(pgSql, params);
-    // Map lowercase Postgres keys to CamelCase used in the app
-    return res.rows.map(row => {
-      const newRow: any = {};
-      for (const key of Object.keys(row)) {
-        if (key === 'uploadedat') newRow.uploadedAt = row[key];
-        else if (key === 'rowcount') newRow.rowCount = row[key];
-        else if (key === 'storagepath') newRow.storagePath = row[key];
-        else if (key === 'workbookid') newRow.workbookId = row[key];
-        else if (key === 'selectedcolumn') newRow.selectedColumn = row[key];
-        else if (key === 'createdat') newRow.createdAt = row[key];
-        else if (key === 'resultid') newRow.resultId = row[key];
-        else if (key === 'updatedat') newRow.updatedAt = row[key];
-        else newRow[key] = row[key];
-      }
-      return newRow;
-    });
-  } else {
-    const stmt = sqliteDb.prepare(sql);
-    if (sql.trim().toUpperCase().startsWith('SELECT')) {
-      return stmt.all(...params);
-    } else {
-      return stmt.run(...params);
-    }
+
+    await pool.query(schemaSql);
+    console.log(">>> Database migration successful");
+  } catch (err) {
+    console.error(">>> Database migration error:", err);
   }
 }
 
+// Auto-run migrations on module load
+runMigrations();
+
 /**
- * Get a single record
+ * Execute a parameterized SQL query
+ * Uses $1, $2, ... parameter syntax (PostgreSQL native)
  */
-export async function getOne(sql: string, params: any[] = []): Promise<any> {
-  const rows = await query(sql, params);
+export async function query<T = Record<string, unknown>>(
+  sql: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  const result = await pool.query(sql, params);
+  return result.rows as T[];
+}
+
+/**
+ * Get a single record, or null if not found
+ */
+export async function getOne<T = Record<string, unknown>>(
+  sql: string,
+  params: unknown[] = []
+): Promise<T | null> {
+  const rows = await query<T>(sql, params);
   return rows[0] || null;
 }
 
-export default { query, getOne };
+/**
+ * Execute an INSERT/UPDATE/DELETE and return affected row count
+ */
+export async function execute(
+  sql: string,
+  params: unknown[] = []
+): Promise<number> {
+  const result = await pool.query(sql, params);
+  return result.rowCount || 0;
+}
+
+/**
+ * Run multiple queries inside a transaction
+ */
+export async function transaction<T>(
+  fn: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Batch insert rows efficiently using a single multi-row INSERT
+ */
+export async function batchInsert(
+  tableName: string,
+  columns: string[],
+  rows: unknown[][]
+): Promise<void> {
+  if (rows.length === 0) return;
+
+  // Build parameterized values: ($1,$2,$3), ($4,$5,$6), ...
+  const colCount = columns.length;
+  const valueClauses: string[] = [];
+  const allParams: unknown[] = [];
+
+  // Insert in chunks of 500 rows to avoid parameter limit (65535)
+  const chunkSize = Math.floor(65535 / colCount);
+  const safeChunkSize = Math.min(chunkSize, 500);
+
+  for (let c = 0; c < rows.length; c += safeChunkSize) {
+    const chunk = rows.slice(c, c + safeChunkSize);
+    const chunkValueClauses: string[] = [];
+    const chunkParams: unknown[] = [];
+
+    for (let i = 0; i < chunk.length; i++) {
+      const row = chunk[i];
+      const placeholders = row.map(
+        (_, j) => `$${i * colCount + j + 1}`
+      );
+      chunkValueClauses.push(`(${placeholders.join(",")})`);
+      chunkParams.push(...row);
+    }
+
+    const sql = `INSERT INTO ${tableName} (${columns.join(",")}) VALUES ${chunkValueClauses.join(",")}`;
+    await pool.query(sql, chunkParams);
+  }
+}
+
+export default { query, getOne, execute, transaction, batchInsert };

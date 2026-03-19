@@ -1,398 +1,280 @@
-import { Worker, Job } from 'bullmq';
-import IORedis from 'ioredis';
-import db from '../lib/db';
-import http from 'http';
-import { v4 as uuidv4 } from 'uuid';
-import path from 'path';
-import fs from 'fs/promises';
-import Papa from 'papaparse';
-import fsStream from 'fs';
-import { BucketNode } from '../types';
-import { mapBatchToTaxonomy, TaxonomyNode } from '../lib/ai';
-import { Database } from 'duckdb-async';
+import { Worker, Job } from "bullmq";
+import IORedis from "ioredis";
+import { query, execute, batchInsert, getOne } from "../lib/db";
+import { downloadFile, writeToTempFile, deleteTempFile } from "../lib/storage";
+import { classifyBatch } from "../lib/ai";
+import { DEFAULT_TAXONOMY, getFullTaxonomy } from "../lib/defaultTaxonomy";
+import type { BucketDefinition, AIProvider } from "../types";
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+// Parse CSV line (handles quoted fields)
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
 
-// No dummy HTTP server needed here anymore as Next.js handles the listening port
+  for (const char of line) {
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result.map((v) => v.replace(/^"|"$/g, ""));
+}
 
-console.log(`>>> WORKER PROCESS INITIALIZED [PID: ${process.pid}]`);
-console.log('>>> WORKER CONNECTING TO REDIS:', REDIS_URL.split('@').pop());
+// Parse full CSV text into array of row objects
+function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[] } {
+  const lines = text.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return { headers: [], rows: [] };
 
-const connection = new IORedis(REDIS_URL, {
-    maxRetriesPerRequest: null,
-});
+  const headers = parseCSVLine(lines[0]);
+  const rows: Record<string, string>[] = [];
 
-connection.on('connect', () => console.log('>>> REDIS CONNECTED'));
-connection.on('error', (err) => console.error('>>> REDIS ERROR:', err));
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = values[j] || "";
+    }
+    rows.push(row);
+  }
 
-console.log('>>> Background Worker Starting...');
+  return { headers, rows };
+}
 
-// --- Helper Functions ---|
+const BATCH_SIZE = 25;
 
-function buildBucketTree(nodes: TaxonomyNode[], depth: number = 0): BucketNode[] {
-    return nodes.map(node => ({
-        id: uuidv4(),
-        name: node.name,
-        rowCount: 0,
-        childrenCount: node.children ? node.children.length : 0,
-        children: node.children ? buildBucketTree(node.children, depth + 1) : [],
-        rowIndices: [],
-        depth
+async function processAnalysisJob(job: Job) {
+  const { analysisId, workbookId, jobId, column, provider } = job.data;
+
+  try {
+    // Update status to processing
+    await execute(
+      "UPDATE analyses SET status = 'processing', started_at = NOW() WHERE id = $1",
+      [analysisId]
+    );
+    await execute(
+      "UPDATE jobs SET status = 'processing', message = 'Downloading file...' WHERE id = $1",
+      [jobId]
+    );
+
+    // Get workbook info
+    const workbook = await getOne<{ storage_key: string; columns: string }>(
+      "SELECT storage_key, columns FROM workbooks WHERE id = $1",
+      [workbookId]
+    );
+
+    if (!workbook) throw new Error("Workbook not found");
+
+    // Download CSV from R2
+    const buffer = await downloadFile(workbook.storage_key);
+    const csvText = buffer.toString("utf-8");
+    const { headers, rows } = parseCSV(csvText);
+
+    // Get custom buckets
+    const customBucketRows = await query<{ bucket_name: string; description: string; direct_ancestor: string; root_category: string; include_terms: string; exclude_terms: string; example_strings: string }>(
+      "SELECT * FROM custom_buckets"
+    );
+    const customBuckets: BucketDefinition[] = customBucketRows.map((r) => ({
+      bucket_name: r.bucket_name,
+      description: r.description || "",
+      direct_ancestor: r.direct_ancestor || "",
+      root_category: r.root_category || "",
+      include: JSON.parse(r.include_terms || "[]"),
+      exclude: JSON.parse(r.exclude_terms || "[]"),
+      example_strings: JSON.parse(r.example_strings || "[]"),
     }));
-}
 
+    const taxonomy = getFullTaxonomy(customBuckets);
 
+    // Update total rows
+    await execute(
+      "UPDATE analyses SET total_rows = $1 WHERE id = $2",
+      [rows.length, analysisId]
+    );
 
-function findPathToNode(nodes: BucketNode[], targetId: string, currentPath: BucketNode[] = []): BucketNode[] | null {
-    for (const node of nodes) {
-        if (node.id === targetId) return [...currentPath, node];
-        if (node.children && node.children.length > 0) {
-            const p = findPathToNode(node.children, targetId, [...currentPath, node]);
-            if (p) return p;
-        }
-    }
-    return null;
-}
+    let totalTokens = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let exactMatches = 0;
+    let aiClassified = 0;
+    let generalCount = 0;
+    const bucketDist: Record<string, number> = {};
+    const allAnalysisRows: unknown[][] = [];
 
-// --- Worker Logic ---
+    // Process in batches
+    for (let batchStart = 0; batchStart < rows.length; batchStart += BATCH_SIZE) {
+      // Check for cancellation
+      const jobRecord = await getOne<{ status: string }>(
+        "SELECT status FROM jobs WHERE id = $1",
+        [jobId]
+      );
+      if (jobRecord?.status === "cancelling") {
+        await execute(
+          "UPDATE analyses SET status = 'completed_partial', completed_at = NOW() WHERE id = $1",
+          [analysisId]
+        );
+        await execute(
+          "UPDATE jobs SET status = 'cancelled', message = 'Cancelled by user' WHERE id = $1",
+          [jobId]
+        );
+        return;
+      }
 
-const worker = new Worker('workbook-analysis', async (job: Job) => {
-    const { jobId, workbookId, options } = job.data;
-    const { selectedColumn, confirmedBuckets, provider, minClusterSize = 50, maxRowsToProcess, customApiKey } = options;
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, rows.length);
+      const batch = rows.slice(batchStart, batchEnd);
 
-    try {
-        console.log(`>>> Starting Job [${jobId}] for Workbook [${workbookId}]`);
+      const values = batch.map((row, i) => ({
+        index: batchStart + i,
+        value: row[column] || "",
+      }));
 
-        // 1. Initial Status
-        await db.query(`UPDATE jobs SET status = ?, message = ?, progress = 5, updatedAt = ? WHERE id = ?`,
-            ['processing', 'Initializing worker...', new Date().toISOString(), jobId]);
+      const progress = Math.round((batchStart / rows.length) * 100);
+      await execute(
+        "UPDATE analyses SET progress = $1, message = $2, total_rows_processed = $3 WHERE id = $4",
+        [progress, `Processing rows ${batchStart + 1}–${batchEnd}...`, batchStart, analysisId]
+      );
+      await execute(
+        "UPDATE jobs SET progress = $1, message = $2 WHERE id = $3",
+        [progress, `Batch ${Math.floor(batchStart / BATCH_SIZE) + 1}/${Math.ceil(rows.length / BATCH_SIZE)}`, jobId]
+      );
 
-        const workbook = await db.getOne("SELECT * FROM workbooks WHERE id = ?", [workbookId]);
-        if (!workbook) throw new Error("Workbook not found");
+      try {
+        const { results, tokenUsage } = await classifyBatch(
+          values,
+          taxonomy,
+          provider as AIProvider,
+        );
 
-        // 2. Prepare Structure
-        const generalBucket: BucketNode = {
-            id: uuidv4(),
-            name: "General / Unformatted",
-            rowCount: 0,
-            childrenCount: 0,
-            children: [],
-            rowIndices: [],
-            depth: 0
-        };
+        totalTokens.promptTokens += tokenUsage.promptTokens;
+        totalTokens.completionTokens += tokenUsage.completionTokens;
+        totalTokens.totalTokens += tokenUsage.totalTokens;
 
-        const rootBuckets: BucketNode[] = [generalBucket];
-        const taxonomyBuckets = buildBucketTree(confirmedBuckets as TaxonomyNode[]);
-        rootBuckets.push(...taxonomyBuckets);
+        for (const res of results) {
+          const row = rows[res.index];
+          const bucketName = res.bucket_1.name || "General Industry";
+          const isGeneric = res.generic || !res.bucket_1.name;
+          const isDQ = res.disqualified;
 
-        const valueMap: Record<string, BucketNode> = {};
-        
-        // RECACULATE UNIQUE VALUES USING DUCKDB (Avoiding memory explosion over Redis)
-        const safePath = workbook.storagePath.replace(/'/g, "''");
-        const initDuckDB = await Database.create(':memory:');
-        const countQuery = `
-            SELECT "${selectedColumn}" as val, count(*) as count
-            FROM read_csv('${safePath}', header=True, auto_detect=True)
-            WHERE "${selectedColumn}" IS NOT NULL AND "${selectedColumn}" != ''
-            GROUP BY "${selectedColumn}"
-            ORDER BY count DESC
-        `;
-        const frequencyRows = await initDuckDB.all(countQuery);
-        await initDuckDB.close();
+          if (isGeneric) generalCount++;
+          else if (res.bucket_1.score >= 0.8) exactMatches++;
+          else aiClassified++;
 
-        // OPTIMIZATION: Sort unique values by frequency, and only send the top N to AI.
-        // This is crucial for large datasets (60k+ unique values) to avoid API fatigue and timeouts.
-        const allUniqueStrings = frequencyRows.map(row => row.val?.toString().trim()).filter(Boolean);
-        const maxLimit = maxRowsToProcess && maxRowsToProcess > 0 ? maxRowsToProcess : allUniqueStrings.length;
-        const sortedUniqueStrings = allUniqueStrings.slice(0, maxLimit);
+          bucketDist[bucketName] = (bucketDist[bucketName] || 0) + 1;
 
-        // --- NEW HYBRID WORKFLOW (OPTION C) ---
-
-        // 1. Build an exact match lookup dictionary from the user's approved taxonomy
-        const exactMatchLookup = new Map<string, BucketNode>();
-        function fillExactMatches(nodes: BucketNode[]) {
-            for (const node of nodes) {
-                if (node.name !== "General / Unformatted") {
-                    exactMatchLookup.set(node.name.toLowerCase().trim(), node);
-                }
-                if (node.children) fillExactMatches(node.children);
-            }
-        }
-        fillExactMatches(rootBuckets);
-
-        // 2. Separate strictly Exact Matches from Unknowns
-        const aiTargetStrings: string[] = [];
-        let inclusiveMapHits = 0;
-        const exactKeys = Array.from(exactMatchLookup.keys());
-
-        for (const str of sortedUniqueStrings) {
-            const key = str.toLowerCase();
-            if (exactMatchLookup.has(key)) {
-                // Instantly map exact matches for free and speed!
-                valueMap[key] = exactMatchLookup.get(key)!;
-            } else {
-                // INCLUSIVE MATCH (Solution 1): Does the string contain any official category natively?
-                const foundMatch = exactKeys.find(matchKey => key.includes(matchKey));
-                if (foundMatch) {
-                    valueMap[key] = exactMatchLookup.get(foundMatch)!;
-                    inclusiveMapHits++;
-                } else {
-                    aiTargetStrings.push(str);
-                }
-            }
-        }
-
-        // Send all unknowns to AI but capped to a very high safety limit to avoid extreme bankruptcy
-        const maxAiTargetsLimit = 60000;
-        const cappedAiTargets = aiTargetStrings.slice(0, maxAiTargetsLimit);
-        
-        const BATCH_SIZE = 150; // Increased batch size since models can handle 150 easy
-        const nodeToPath: Map<string, BucketNode[]> = new Map();
-
-        // 3. AI Mapping Phase (Only applied as a Fallback Rescue for Unknowns)
-        await db.query(`UPDATE jobs SET message = ?, progress = 10, updatedAt = ? WHERE id = ?`,
-            [`AI processing ${cappedAiTargets.length} unmapped values...`, new Date().toISOString(), jobId]);
-
-        let totalMappingsReceived = 0;
-        let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-        const lowConfidenceItems: any[] = [];
-        const valueMetadata: Record<string, any> = {};
-        let isCancelled = false;
-
-        for (let i = 0; i < cappedAiTargets.length; i += BATCH_SIZE) {
-            // Check for user-driven cancellation/pause every batch
-            const jobStatus = await db.getOne('SELECT status FROM jobs WHERE id = ?', [jobId]);
-            if (jobStatus?.status === 'cancelling' || jobStatus?.status === 'cancelled') {
-                console.log(`>>> Job [${jobId}] ABORT SIGNAL RECEIVED. Halting AI Mapping early...`);
-                isCancelled = true;
-                break;
-            }
-
-            const batch = cappedAiTargets.slice(i, i + BATCH_SIZE);
-            const batchProgress = 10 + Math.floor((i / cappedAiTargets.length) * 40); 
-
-            await db.query(`UPDATE jobs SET progress = ?, updatedAt = ? WHERE id = ?`, [batchProgress, new Date().toISOString(), jobId]);
-            console.log(`>>> Job [${jobId}] AI Mapping Batch ${i / BATCH_SIZE + 1}/${Math.ceil(cappedAiTargets.length / BATCH_SIZE)}...`);
-
-            let result: any = null;
-            let retries = 3;
-
-            while (retries > 0) {
-                try {
-                    result = await mapBatchToTaxonomy(selectedColumn, batch, confirmedBuckets, provider, customApiKey);
-                    if (result && result.mappings) break;
-                    throw new Error("Empty mapping result from provider");
-                } catch (e: any) {
-                    console.error(`!!! Batch error [${jobId}] Retries left ${retries - 1}:`, e.message);
-                    retries--;
-                    if (retries === 0) {
-                        console.error(`!!! FATAL: Batch failed 3 retries. Abandoning batch mapping.`);
-                        break;
-                    }
-                    // Exponential backoff for strict rate limits on 60,000 batches
-                    await new Promise(r => setTimeout(r, 3000 * (4 - retries)));
-                }
-            }
-
-            // Global spacer delay to avoid slamming the API rate limit (Tokens per Min & Requests per Min)
-            await new Promise(r => setTimeout(r, 1500));
-
-            if (result?.mappings) {
-                totalMappingsReceived += result.mappings.length;
-                if (result.usage) {
-                    tokenUsage.promptTokens += result.usage.promptTokens || 0;
-                    tokenUsage.completionTokens += result.usage.completionTokens || 0;
-                    tokenUsage.totalTokens += result.usage.totalTokens || 0;
-                }
-
-                result.mappings.forEach((m: any) => {
-                    if (!m.path || m.path.length === 0) return;
-                    
-                    const pathArray = Array.isArray(m.path) ? m.path : m.path.split('>').map((s: string) => s.trim());
-                    
-                    let currParent: BucketNode | undefined = undefined;
-                    let lastNode: BucketNode | undefined;
-
-                    for (let d = 0; d < pathArray.length; d++) {
-                        const segment = pathArray[d];
-                        const siblings: BucketNode[] = currParent ? currParent.children : rootBuckets;
-                        let node: BucketNode | undefined = siblings.find((b: BucketNode) => b.name.toLowerCase().trim() === segment.toLowerCase().trim());
-
-                        if (!node) {
-                            // STRICT CONSTRAINT: Do not allow AI to hallucinate directories. Break and flag undefined.
-                            lastNode = undefined;
-                            break;
-                        }
-                        currParent = node;
-                        lastNode = node;
-                    }
-
-                    if (m.value) {
-                        const originalKey = batch.find(k => k.toLowerCase().trim() === m.value.toLowerCase().trim()) || m.value;
-                        const lookupKey = originalKey.toLowerCase().trim();
-
-                        valueMetadata[lookupKey] = {
-                            confidence: m.confidence,
-                            reason: m.reason,
-                            is_generic: m.is_generic,
-                            is_disqualified: m.is_disqualified
-                        };
-                        
-                        if (m.confidence !== undefined && m.confidence < 0.8) {
-                            lowConfidenceItems.push({
-                                value: originalKey,
-                                mappedPath: m.path,
-                                confidence: m.confidence,
-                                reason: m.reason,
-                                original_bucket: m.original_bucket_1
-                            });
-                        }
-
-                        if (lastNode && !m.is_disqualified) {
-                            valueMap[lookupKey] = lastNode;
-                            const fullPath = findPathToNode(rootBuckets, lastNode.id);
-                            if (fullPath) nodeToPath.set(lastNode.id, fullPath);
-                        } else {
-                            // Fallback to General Bucket if AI hallucinated paths or couldn't classify it properly
-                            valueMap[lookupKey] = generalBucket;
-                        }
-                    }
-                });
-            }
-        }
-        console.log(`>>> Job [${jobId}] AI Rescue done. Total mappings processed: ${totalMappingsReceived}`);
-
-        // 4. Grouping & Assigning Phase using DuckDB
-        const assignmentMessage = isCancelled 
-            ? 'Process paused. Saving partial AI completions directly to CSV... (DuckDB)'
-            : 'Assigning matched records directly to CSV... (DuckDB)';
-        await db.query(`UPDATE jobs SET message = ?, progress = 55, updatedAt = ? WHERE id = ?`,
-            [assignmentMessage, new Date().toISOString(), jobId]);
-
-        const unmappedRows: { index: number, value: string }[] = [];
-        let totalRowsProcessed = 0;
-
-        const duckDB = await Database.create(':memory:');
-        
-        // We use row_number()-1 to get 0-based CSV rows for consistent row-indexing
-        const duckQuery = `
-            SELECT "${selectedColumn}" as val, list(row_idx) as indices, count(*) as row_count
-            FROM (
-                SELECT row_number() OVER () - 1 as row_idx, * 
-                FROM read_csv('${safePath}', header=True, auto_detect=True)
-            )
-            GROUP BY "${selectedColumn}"
-        `;
-        
-        const groupedRows = await duckDB.all(duckQuery);
-        
-        for (const row of groupedRows) {
-            const val = row.val?.toString().trim();
-            const indices: number[] = Array.isArray(row.indices) ? row.indices.map((i: any) => Number(i)) : [];
-            const count = Number(row.row_count || 0);
-            
-            totalRowsProcessed += count;
-
-            if (!val) {
-                generalBucket.rowIndices.push(...indices);
-                generalBucket.rowCount += count;
-            } else {
-                const lookupKey = val.toLowerCase();
-                let target: BucketNode | undefined = valueMap[lookupKey];
-
-                if (target) {
-                    const path = nodeToPath.get(target.id) || findPathToNode(rootBuckets, target.id);
-                    if (path) {
-                        path.forEach(node => {
-                            node.rowCount += count;
-                        });
-                        target.rowIndices.push(...indices);
-                    } else {
-                        target.rowCount += count;
-                        target.rowIndices.push(...indices);
-                    }
-                } else {
-                    // For the unmapped rows, we push individual properties so auto-discovery can process them later
-                    const mappedIndices = indices.map(idx => ({ index: idx, value: val }));
-                    unmappedRows.push(...mappedIndices);
-                    
-                    generalBucket.rowIndices.push(...indices);
-                    generalBucket.rowCount += count;
-                }
-            }
-        }
-        
-        await duckDB.close();
-
-        // Update progress since DuckDB is super fast, it happens all at once
-        await db.query(`UPDATE jobs SET progress = 85, updatedAt = ? WHERE id = ?`, [new Date().toISOString(), jobId]).catch(() => { });
-
-        // 5. Semantic Auto-Discovery Phase (Breaking The General Bucket) DELETED
-        // Per strictly conforming mapping instructions, we will not create Auto-Discovered clusters and rely entirely on the exact taxonomy.
-
-        // 6. Finalize and Save JSON Result
-        const analysisId = uuidv4();
-        
-        const finalResult: any = {
-            workbookId,
-            selectedColumn,
-            createdAt: new Date().toISOString(),
-            rootBuckets,
-            valueMetadata,
-            stats: {
-                uniqueValues: sortedUniqueStrings.length,
-                aiMapped: totalMappingsReceived,
-                emptyCount: generalBucket.rowCount,
-                totalProcessed: totalRowsProcessed
-            }
-        };
-
-        const logData = {
-            workbookId,
-            jobId,
+          allAnalysisRows.push([
             analysisId,
-            startedAt: finalResult.createdAt,
-            completedAt: new Date().toISOString(),
-            metrics: {
-                totalUniqueStrings: sortedUniqueStrings.length,
-                exactMatchesAutoAssigned: sortedUniqueStrings.length - aiTargetStrings.length - inclusiveMapHits,
-                inclusiveMatchesAutoAssigned: inclusiveMapHits,
-                aiProcessedPoolSent: cappedAiTargets.length,
-                aiDiscardedBySafetyLimit: Math.max(0, aiTargetStrings.length - maxAiTargetsLimit),
-                lowConfidenceCount: lowConfidenceItems.length
-            },
-            lowConfidenceItems,
-            aiTokenUsage: tokenUsage,
-            providerUsed: provider,
-            finalResults: finalResult.stats
-        };
-
-        finalResult.stats.logData = logData; // Append logs to DB natively via text payload
-
-        const analysisDir = path.join(process.cwd(), "data", "analysis");
-        await fs.mkdir(analysisDir, { recursive: true });
-        await fs.writeFile(path.join(analysisDir, `${analysisId}.json`), JSON.stringify(finalResult));
-
-        await db.query(`INSERT INTO analyses (id, workbookId, selectedColumn, createdAt, stats) VALUES (?, ?, ?, ?, ?)`,
-            [analysisId, workbookId, selectedColumn, finalResult.createdAt, JSON.stringify(finalResult.stats)]);
-
-        const finalStatus = isCancelled ? 'completed_partial' : 'completed';
-        const finalMessage = isCancelled ? 'Analysis paused and progress saved!' : 'Analysis complete!';
-
-        await db.query(`UPDATE jobs SET status = ?, message = ?, progress = 100, resultId = ?, updatedAt = ? WHERE id = ?`,
-            [finalStatus, finalMessage, analysisId, new Date().toISOString(), jobId]);
-
-        console.log(`>>> Job [${jobId}] DONE (${finalStatus}). Analysis ID: ${analysisId}`);
-        return { success: true, analysisId };
-
-    } catch (error: any) {
-        console.error(`!!! Job [${jobId}] Failed:`, error.message);
-        await db.query(`UPDATE jobs SET status = ?, message = ?, updatedAt = ? WHERE id = ?`,
-            ['failed', error.message, new Date().toISOString(), jobId]);
-        throw error;
+            res.index,
+            row[column] || "",
+            JSON.stringify(row),
+            bucketName,
+            bucketName,
+            res.bucket_3.name || null,
+            res.bucket_2.name || null,
+            res.bucket_1.score || null,
+            res.bucket_1.reason || null,
+            isGeneric,
+            isDQ,
+          ]);
+        }
+      } catch (batchError) {
+        console.error(`Batch error at rows ${batchStart}-${batchEnd}:`, batchError);
+        // Mark these rows as General Industry on error
+        for (let i = batchStart; i < batchEnd; i++) {
+          const row = rows[i];
+          allAnalysisRows.push([
+            analysisId, i, row[column] || "", JSON.stringify(row),
+            "General Industry", "General Industry", null, null, null,
+            "Batch classification error", true, false,
+          ]);
+          generalCount++;
+          bucketDist["General Industry"] = (bucketDist["General Industry"] || 0) + 1;
+        }
+      }
     }
-}, { connection });
 
-worker.on('failed', (job, err) => {
-    console.error(`>>> Worker Job ${job?.id} failed with ${err.message}`);
-});
+    // Batch insert all analysis rows
+    if (allAnalysisRows.length > 0) {
+      await batchInsert(
+        "analysis_rows",
+        [
+          "analysis_id", "row_index", "original_value", "all_columns",
+          "industry", "bucket_name", "root_category", "direct_ancestor",
+          "confidence", "reason", "is_generic", "is_disqualified",
+        ],
+        allAnalysisRows
+      );
+    }
+
+    // Update analysis as completed
+    await execute(
+      `UPDATE analyses SET 
+         status = 'completed',
+         progress = 100,
+         message = 'Analysis complete',
+         total_rows_processed = $1,
+         exact_matches = $2,
+         inclusive_matches = 0,
+         ai_classified = $3,
+         general_bucket_count = $4,
+         token_usage = $5,
+         bucket_distribution = $6,
+         completed_at = NOW()
+       WHERE id = $7`,
+      [
+        rows.length,
+        exactMatches,
+        aiClassified,
+        generalCount,
+        JSON.stringify(totalTokens),
+        JSON.stringify(bucketDist),
+        analysisId,
+      ]
+    );
+
+    await execute(
+      "UPDATE jobs SET status = 'completed', progress = 100, message = 'Done', result_id = $1 WHERE id = $2",
+      [analysisId, jobId]
+    );
+
+    console.log(`>>> Analysis ${analysisId} completed: ${rows.length} rows processed`);
+  } catch (error) {
+    console.error(">>> Worker error:", error);
+    await execute(
+      "UPDATE analyses SET status = 'failed', message = $1 WHERE id = $2",
+      [String(error), analysisId]
+    );
+    await execute(
+      "UPDATE jobs SET status = 'failed', message = $1 WHERE id = $2",
+      [String(error), jobId]
+    );
+  }
+}
+
+// Start worker
+const redisUrl = process.env.REDIS_URL;
+if (redisUrl) {
+  const connection = new IORedis(redisUrl, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+  });
+
+  const worker = new Worker("workbook-analysis", processAnalysisJob, {
+    connection,
+    concurrency: 2,
+  });
+
+  worker.on("completed", (job) => {
+    console.log(`>>> Job ${job.id} completed`);
+  });
+
+  worker.on("failed", (job, error) => {
+    console.error(`>>> Job ${job?.id} failed:`, error);
+  });
+
+  console.log(">>> Quantum Enricher worker started");
+} else {
+  console.warn(">>> REDIS_URL not set, worker not started");
+}
