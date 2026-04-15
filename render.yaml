@@ -29,4 +29,4 @@ services:
 
 databases:
   - name: quantum-db
-    plan: Basic-1gb
+    plan: Basic-256mb

@@ -32,6 +32,7 @@ export default function ProjectsPage() {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const fetchProjects = () => {
     fetch("/api/projects")
@@ -48,6 +49,7 @@ export default function ProjectsPage() {
   const createProject = async () => {
     if (!newName.trim()) return;
     setCreating(true);
+    setCreateError(null);
     try {
       const res = await fetch("/api/projects", {
         method: "POST",
@@ -59,7 +61,12 @@ export default function ProjectsPage() {
         setNewDesc("");
         setShowCreateModal(false);
         fetchProjects();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setCreateError(data.details || data.error || `Server error (${res.status}). Please try again.`);
       }
+    } catch (err) {
+      setCreateError("Network error. Check your connection and try again.");
     } finally {
       setCreating(false);
     }
@@ -179,7 +186,7 @@ export default function ProjectsPage() {
 
       {/* Create Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowCreateModal(false); setCreateError(null); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2 className="modal__title">Create New Project</h2>
             <div className="modal__body">
@@ -206,8 +213,13 @@ export default function ProjectsPage() {
               </label>
             </div>
             <div className="modal__footer">
+              {createError && (
+                <p style={{ color: "var(--color-error, #f87171)", fontSize: "0.8rem", marginBottom: "0.5rem", width: "100%" }}>
+                  ⚠ {createError}
+                </p>
+              )}
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => { setShowCreateModal(false); setCreateError(null); }}
                 className="btn btn--ghost"
               >
                 Cancel
