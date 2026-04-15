@@ -3,7 +3,7 @@ services:
   - type: web
     name: quantum-scale-app
     env: node
-    plan: free
+    plan: standard
     buildCommand: npm install && npm run build
     startCommand: npm run start:prod
     envVars:
@@ -24,9 +24,9 @@ services:
   # Managed Redis
   - type: redis
     name: quantum-redis
-    plan: free
+    plan: starter
     ipAllowList: []
 
 databases:
   - name: quantum-db
-    plan: free
+    plan: starter
