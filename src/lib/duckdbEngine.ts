@@ -21,6 +21,20 @@ export interface DuckDBClassificationResult {
 }
 
 /**
+ * Detect scraper error values that should always → General Industry.
+ * Never attempt fallback classification for these.
+ */
+function isErrorValue(val: string): boolean {
+  const v = (val || "").toLowerCase().trim();
+  if (!v || v === "null" || v === "n/a" || v === "na" || v === "error") return true;
+  if (v.includes("scrape error") || v.includes("site error") || v.includes("crawl error")) return true;
+  // Handle quoted variants like ""site error""
+  const unquoted = v.replace(/^"|"$|^'|'$/g, "").trim();
+  if (unquoted.includes("site error") || unquoted.includes("scrape error")) return true;
+  return false;
+}
+
+/**
  * Classify rows using DuckDB SQL-based "best match wins" scoring.
  */
 export async function classifyWithDuckDB(
@@ -80,10 +94,11 @@ export async function classifyWithDuckDB(
         }
       }
       const fallbackVal = fallbackParts.join(" ").substring(0, 500);
-      const isError = !primaryVal || primaryVal.includes("scrape error") || primaryVal === "error" || primaryVal === "n/a" || primaryVal === "null" || primaryVal.includes("site error");
+      const isError = isErrorValue(primaryVal);
 
-      // Use fallback_text if primary is empty/error
-      const effectivePrimary = isError ? fallbackVal : primaryVal;
+      // IMPORTANT: Error values → empty string → score 0 on all buckets → General Industry
+      // We do NOT fall back to website/email columns for error rows.
+      const effectivePrimary = isError ? "" : primaryVal;
 
       await conn.run(
         `INSERT INTO contacts VALUES (${i}, '${escapeSql(effectivePrimary)}', '${escapeSql(fallbackVal)}')`
@@ -199,8 +214,8 @@ export async function classifyWithDuckDB(
         const score = Number(r[3] || 0);
         const reason = String(r[4] || "No keyword matches found");
 
-        // Skip empty/error values
-        const isError = !primaryText || primaryText === "scrape error" || primaryText === "error" || primaryText === "n/a";
+        // Always send error values to General Industry — never use their score
+        const isError = isErrorValue(rows[idx]?.[selectedColumn] || "");
 
         const maxScore = 20;
         const confidence = Math.min(1, score / maxScore);

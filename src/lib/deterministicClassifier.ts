@@ -46,6 +46,17 @@ export function classifyDeterministic(
   return batch.map((item) => classifyOne(item.index, item.value, item.allColumns || {}, taxonomy));
 }
 
+function isErrorValue(val: string): boolean {
+  const v = val.toLowerCase().trim();
+  if (!v || v === "null" || v === "n/a" || v === "na" || v === "error") return true;
+  // Scraper error patterns
+  if (v.includes("scrape error") || v.includes("site error") || v.includes("crawl error")) return true;
+  // Quoted variants: ""site error"", 'site error'
+  const unquoted = v.replace(/^"|"$|^'|'$/g, "").trim();
+  if (unquoted.includes("site error") || unquoted.includes("scrape error")) return true;
+  return false;
+}
+
 function classifyOne(
   index: number,
   primaryValue: string,
@@ -54,7 +65,7 @@ function classifyOne(
 ): DeterministicResult {
   const primaryLower = primaryValue.toLowerCase().trim();
 
-  if (!primaryLower || primaryLower === "scrape error" || primaryLower === "error" || primaryLower === "n/a") {
+  if (!primaryLower || isErrorValue(primaryLower)) {
     return {
       index,
       value: primaryValue,
