@@ -4,7 +4,7 @@ import { classifyBatch } from "@/lib/ai";
 import { downloadFile } from "@/lib/storage";
 import { getFullTaxonomy, DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
 import { classifyDeterministic, applyBucketThreshold } from "@/lib/deterministicClassifier";
-import { classifyWithDuckDB, applyBucketThresholdDuckDB } from "@/lib/duckdbEngine";
+import { classifyWithDuckDB, classifyWithEnsemble, applyBucketThresholdDuckDB } from "@/lib/duckdbEngine";
 import type { BucketDefinition, AIProvider } from "@/types";
 
 // Parse CSV line (handles quoted fields)
@@ -206,20 +206,29 @@ async function processAnalysis(
       allColumns: row,
     }));
 
-    // ─── Deterministic Only (DuckDB) ────────────────────
+    // ─── Deterministic Only (Ensemble) ──────────────────
     if (analysisMode === "deterministic_only") {
-      await execute("UPDATE jobs SET message = 'Running DuckDB deterministic classification...' WHERE id = $1", [jobId]);
+      await execute("UPDATE jobs SET message = 'Phase 1/4: Running ensemble (3 strategies: exact, fuzzy, fallback)...' WHERE id = $1", [jobId]);
 
       let results;
       try {
-        results = await classifyWithDuckDB(rows, column, taxonomy);
+        results = await classifyWithEnsemble(rows, column, taxonomy);
+        await execute("UPDATE jobs SET message = 'Phase 4/4: Applying bucket thresholds...' WHERE id = $1", [jobId]);
         results = applyBucketThresholdDuckDB(results, minBucketThreshold);
-      } catch (duckErr) {
-        console.warn("DuckDB failed, falling back to JS classifier:", duckErr);
-        const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
-        let jsResults = classifyDeterministic(jsValues, taxonomy);
-        jsResults = applyBucketThreshold(jsResults, minBucketThreshold);
-        results = jsResults;
+      } catch (ensembleErr) {
+        console.warn("Ensemble failed, falling back to single-pass DuckDB:", ensembleErr);
+        try {
+          await execute("UPDATE jobs SET message = 'Falling back to single-pass DuckDB...' WHERE id = $1", [jobId]);
+          results = await classifyWithDuckDB(rows, column, taxonomy);
+          results = applyBucketThresholdDuckDB(results, minBucketThreshold);
+        } catch (duckErr) {
+          console.warn("DuckDB failed, falling back to JS classifier:", duckErr);
+          await execute("UPDATE jobs SET message = 'Falling back to JS classifier...' WHERE id = $1", [jobId]);
+          const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
+          let jsResults = classifyDeterministic(jsValues, taxonomy);
+          jsResults = applyBucketThreshold(jsResults, minBucketThreshold);
+          results = jsResults;
+        }
       }
 
       for (const res of results) {
