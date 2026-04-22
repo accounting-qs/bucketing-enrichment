@@ -842,6 +842,236 @@
 .provider-item__name { font-weight: 500; min-width: 100px; }
 .provider-item__env { flex: 1; font-family: monospace; font-size: 0.78rem; color: #64748b; }
 
+.taxonomy-count-badge {
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: rgba(16,185,129,0.12);
+  color: var(--primary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: 6px;
+}
+
+.taxonomy-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.taxonomy-search__icon {
+  position: absolute;
+  left: 11px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.taxonomy-search__input {
+  width: 100%;
+  padding: 8px 36px 8px 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  font-size: 0.82rem;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.taxonomy-search__input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-glow); }
+
+.taxonomy-search__clear {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.taxonomy-search__clear:hover { color: var(--foreground); }
+
+.taxonomy-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.taxonomy-legend__item { display: flex; align-items: center; gap: 5px; }
+
+.taxonomy-legend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.taxonomy-legend__dot--parent { background: var(--primary); }
+.taxonomy-legend__dot--child  { background: #94a3b8; }
+.taxonomy-legend__dot--leaf   { background: #cbd5e1; }
+
+/* ── Taxonomy Tree ── */
+
+.taxonomy-tree { display: flex; flex-direction: column; gap: 6px; }
+
+.taxo-parent {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.taxo-parent--fallback { opacity: 0.75; }
+
+.taxo-parent__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: filter 0.15s;
+}
+
+.taxo-parent__header:hover { filter: brightness(0.96); }
+
+.taxo-parent__chevron {
+  color: #94a3b8;
+  transition: transform 0.2s ease;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.taxo-parent__icon { font-size: 1rem; flex-shrink: 0; }
+
+.taxo-parent__name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.taxo-parent__meta { display: flex; gap: 6px; margin-left: auto; }
+
+.taxo-badge {
+  font-size: 0.68rem;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.taxo-badge--children { background: rgba(100,116,139,0.12); color: #64748b; }
+.taxo-badge--leaves   { background: rgba(16,185,129,0.1); color: #10b981; }
+
+.taxo-children { border-top: 1px solid var(--border); }
+
+.taxo-child { border-bottom: 1px solid var(--border); }
+.taxo-child:last-child { border-bottom: none; }
+
+.taxo-child__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px 7px 28px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #64748b;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.taxo-child__header:hover { background: rgba(128,128,128,0.05); }
+
+.taxo-child__chevron {
+  color: #94a3b8;
+  transition: transform 0.2s ease;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.taxo-child__name { flex: 1; }
+
+.taxo-child__count {
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: rgba(100,116,139,0.1);
+  color: #94a3b8;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.taxo-leaves { display: flex; flex-direction: column; gap: 0; }
+
+.taxo-leaf {
+  padding: 8px 14px 8px 44px;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.01);
+}
+
+.dark .taxo-leaf { background: rgba(255,255,255,0.01); }
+
+.taxo-leaf__header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 2px;
+}
+
+.taxo-leaf__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.taxo-leaf__name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  flex: 1;
+  color: var(--foreground);
+}
+
+.taxo-leaf__kw {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.taxo-leaf__desc {
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.4;
+  margin: 0 0 4px;
+}
+
+.taxo-leaf__examples { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.taxo-leaf__example {
+  font-size: 0.65rem;
+  background: rgba(100,116,139,0.1);
+  color: #94a3b8;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-style: italic;
+}
+
+/* Bucket tree parent variant (wider item with colored border) */
+.bucket-tree__item--parent {
+  font-size: 0.75rem;
+  padding: 7px 10px 7px 9px;
+}
+
+/* ── Old flat taxonomy grid (still used for custom buckets) */
 .taxonomy-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -861,6 +1091,7 @@
 .taxonomy-item--custom { background: var(--primary-glow); border-color: var(--primary); }
 .taxonomy-item__name { font-weight: 500; display: block; }
 .taxonomy-item__ancestor { font-size: 0.72rem; color: #94a3b8; display: block; margin-top: 2px; }
+
 
 /* ========================================
    Empty & Loading States

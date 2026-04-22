@@ -69,17 +69,20 @@ function classifyOne(
     return {
       index,
       value: primaryValue,
-      bucket: "General Industry",
+      bucket: "Error / Failed Enrichment",
       confidence: 0,
-      method: "needs_ai",
+      method: "deterministic",
       reason: "Empty or error value",
     };
   }
 
   const scores: { bucket: BucketDefinition; score: number; matchedTerms: string[] }[] = [];
 
+  // Fallback-only buckets are never scored — they are assigned explicitly
+  const FALLBACK_BUCKETS = new Set(["General Industry", "Needs Manual Review", "Error / Failed Enrichment"]);
+
   for (const bucket of taxonomy) {
-    if (bucket.bucket_name === "General Industry") continue;
+    if (FALLBACK_BUCKETS.has(bucket.bucket_name)) continue;
 
     let score = 0;
     const matchedTerms: string[] = [];
@@ -155,7 +158,7 @@ function classifyOne(
       bucket: "General Industry",
       confidence: 0.1,
       method: "needs_ai",
-      reason: "No keyword matches found",
+      reason: "No keyword matches found — needs AI or manual review",
     };
   }
 
@@ -215,9 +218,10 @@ export function applyBucketThreshold(
     counts[r.bucket] = (counts[r.bucket] || 0) + 1;
   }
 
+  const MERGE_EXEMPT = new Set(["General Industry", "Needs Manual Review", "Error / Failed Enrichment"]);
   const smallBuckets = new Set<string>();
   for (const [bucket, count] of Object.entries(counts)) {
-    if (bucket !== "General Industry" && count < minThreshold) {
+    if (!MERGE_EXEMPT.has(bucket) && count < minThreshold) {
       smallBuckets.add(bucket);
     }
   }

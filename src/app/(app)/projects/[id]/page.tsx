@@ -506,7 +506,7 @@ function AnalysisDetails({
 
   const dist = analysis.bucket_distribution || {};
 
-  // Build full 26-bucket list: ALL taxonomy buckets with counts (0 if none)
+  // Build full 41-bucket list: ALL taxonomy buckets with counts (0 if none)
   // Any non-taxonomy bucket names (AI-invented) get merged into General Industry
   const { DEFAULT_TAXONOMY } = require("@/lib/defaultTaxonomy");
   const fullBuckets: [string, number][] = useMemo(() => {
@@ -611,29 +611,15 @@ function AnalysisDetails({
 
       {/* Split-pane: Bucket Tree + Data Table */}
       {showTable && (
-        <div className="analysis-explorer">
-          {/* Left: Bucket tree sidebar */}
-          <div className="bucket-tree">
-            <button
-              className={`bucket-tree__item ${activeBucket === "all" ? "bucket-tree__item--active" : ""}`}
-              onClick={() => handleBucketClick("all")}
-            >
-              <span className="bucket-tree__icon">📂</span>
-              <span className="bucket-tree__name">All</span>
-              <span className="bucket-tree__count">{totalProcessed}</span>
-            </button>
-            {fullBuckets.map(([bucket, count]) => (
-              <button
-                key={bucket}
-                className={`bucket-tree__item ${activeBucket === bucket ? "bucket-tree__item--active" : ""} ${bucket === "General Industry" ? "bucket-tree__item--general" : ""} ${count === 0 ? "bucket-tree__item--empty" : ""}`}
-                onClick={() => handleBucketClick(bucket)}
-              >
-                <span className="bucket-tree__icon">{bucket === "General Industry" ? "📁" : count > 0 ? "📄" : "📋"}</span>
-                <span className="bucket-tree__name">{bucket}</span>
-                <span className="bucket-tree__count">{count}</span>
-              </button>
-            ))}
-          </div>
+        <div className="analysis-explorer" style={{ gridTemplateColumns: "280px 1fr" }}>
+          {/* Left: Grouped 3-level bucket tree */}
+          <GroupedBucketTree
+            taxonomy={DEFAULT_TAXONOMY}
+            fullBuckets={fullBuckets}
+            activeBucket={activeBucket}
+            totalProcessed={totalProcessed}
+            onBucketClick={handleBucketClick}
+          />
 
           {/* Right: Data table */}
           <div className="analysis-table-wrap">
@@ -685,7 +671,7 @@ function AnalysisDetails({
                             );
                           })}
                           <td>
-                            <span className={`bucket-tag ${row.bucket_name === "General Industry" ? "bucket-tag--general" : ""}`}>
+                            <span className={`bucket-tag ${["General Industry", "Needs Manual Review", "Error / Failed Enrichment"].includes(row.bucket_name) ? "bucket-tag--general" : ""}`}>
                               {row.bucket_name}
                             </span>
                           </td>
@@ -731,3 +717,170 @@ function AnalysisDetails({
   );
 }
 
+// ── Grouped 3-level Bucket Tree ─────────────────────────────
+
+const PARENT_COLORS_RESULTS: Record<string, string> = {
+  "Technology Services": "#3b82f6",
+  "Software & SaaS": "#8b5cf6",
+  "Agencies": "#f59e0b",
+  "Professional & Business Services": "#06b6d4",
+  "Financial Services": "#10b981",
+  "Real Estate": "#f97316",
+  "Industrial & Operations": "#6b7280",
+  "Healthcare": "#ef4444",
+  "Non-Profit / Associations": "#ec4899",
+  "General Industry": "#94a3b8",
+};
+
+const PARENT_ICONS_RESULTS: Record<string, string> = {
+  "Technology Services": "🖥️",
+  "Software & SaaS": "📦",
+  "Agencies": "🎨",
+  "Professional & Business Services": "💼",
+  "Financial Services": "💰",
+  "Real Estate": "🏠",
+  "Industrial & Operations": "🏭",
+  "Healthcare": "🏥",
+  "Non-Profit / Associations": "🤝",
+  "General Industry": "⚠️",
+};
+
+interface BucketDef { bucket_name: string; direct_ancestor: string; root_category: string; }
+
+const FALLBACK_LEAF_NAMES = ["General Industry", "Needs Manual Review", "Error / Failed Enrichment"];
+
+function GroupedBucketTree({
+  taxonomy,
+  fullBuckets,
+  activeBucket,
+  totalProcessed,
+  onBucketClick,
+}: {
+  taxonomy: BucketDef[];
+  fullBuckets: [string, number][];
+  activeBucket: string;
+  totalProcessed: number;
+  onBucketClick: (b: string) => void;
+}) {
+  const countMap = useMemo(() => new Map(fullBuckets), [fullBuckets]);
+  const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({});
+  const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
+
+  const tree = useMemo(() => {
+    const t: Record<string, Record<string, string[]>> = {};
+    for (const b of taxonomy) {
+      const p = b.root_category || "General Industry";
+      const c = b.direct_ancestor || "Other";
+      if (!t[p]) t[p] = {};
+      if (!t[p][c]) t[p][c] = [];
+      t[p][c].push(b.bucket_name);
+    }
+    return t;
+  }, [taxonomy]);
+
+  const parents = useMemo(() => {
+    const all = Object.keys(tree);
+    const non = all.filter((p) => p !== "General Industry");
+    return "General Industry" in tree ? [...non, "General Industry"] : non;
+  }, [tree]);
+
+  const toggleParent = (p: string) =>
+    setExpandedParents((prev) => ({ ...prev, [p]: !prev[p] }));
+  const toggleChild = (key: string) =>
+    setExpandedChildren((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  const parentCount = (parent: string) =>
+    Object.values(tree[parent] || {}).flat().reduce((s, leaf) => s + (countMap.get(leaf) || 0), 0);
+
+  return (
+    <div className="bucket-tree" style={{ maxHeight: 550 }}>
+      {/* All row */}
+      <button
+        className={`bucket-tree__item ${activeBucket === "all" ? "bucket-tree__item--active" : ""}`}
+        onClick={() => onBucketClick("all")}
+        style={{ fontWeight: 600, fontSize: "0.78rem", padding: "8px 12px" }}
+      >
+        <span className="bucket-tree__icon">📂</span>
+        <span className="bucket-tree__name">All Buckets</span>
+        <span className="bucket-tree__count">{totalProcessed}</span>
+      </button>
+
+      <div style={{ height: 1, background: "var(--border)", margin: "2px 0 4px" }} />
+
+      {parents.map((parent) => {
+        const color = PARENT_COLORS_RESULTS[parent] || "#94a3b8";
+        const icon = PARENT_ICONS_RESULTS[parent] || "📁";
+        const total = parentCount(parent);
+        const isOpen = expandedParents[parent] ?? false;
+        const childMap = tree[parent] || {};
+
+        return (
+          <div key={parent}>
+            <button
+              className="bucket-tree__item"
+              onClick={() => toggleParent(parent)}
+              style={{ borderLeft: `3px solid ${color}`, paddingLeft: 9 }}
+            >
+              <span style={{ fontSize: "0.85rem", flexShrink: 0 }}>{icon}</span>
+              <span className="bucket-tree__name" style={{ fontWeight: 600, fontSize: "0.72rem", color }}>
+                {parent}
+              </span>
+              <span className="bucket-tree__count" style={{ background: `${color}22`, color }}>
+                {total}
+              </span>
+            </button>
+
+            {isOpen && Object.entries(childMap).map(([child, leaves]) => {
+              const childKey = `${parent}::${child}`;
+              const isChildOpen = expandedChildren[childKey] ?? false;
+              const childTotal = leaves.reduce((s, l) => s + (countMap.get(l) || 0), 0);
+
+              return (
+                <div key={child}>
+                  <button
+                    className="bucket-tree__item"
+                    onClick={() => toggleChild(childKey)}
+                    style={{ paddingLeft: 22, fontSize: "0.71rem" }}
+                  >
+                    <span style={{ color: "#94a3b8", fontSize: "0.62rem", flexShrink: 0 }}>▸</span>
+                    <span className="bucket-tree__name" style={{ color: "#64748b" }}>{child}</span>
+                    <span className="bucket-tree__count" style={{ background: "rgba(100,116,139,0.12)", color: "#64748b" }}>
+                      {childTotal}
+                    </span>
+                  </button>
+
+                  {isChildOpen && leaves.map((leaf) => {
+                    const count = countMap.get(leaf) || 0;
+                    const isFallback = FALLBACK_LEAF_NAMES.includes(leaf);
+                    return (
+                      <button
+                        key={leaf}
+                        className={`bucket-tree__item ${
+                          activeBucket === leaf ? "bucket-tree__item--active" : ""
+                        } ${
+                          isFallback ? "bucket-tree__item--general" : ""
+                        } ${
+                          count === 0 ? "bucket-tree__item--empty" : ""
+                        }`}
+                        onClick={() => onBucketClick(leaf)}
+                        style={{ paddingLeft: 34, fontSize: "0.69rem" }}
+                      >
+                        <span style={{
+                          width: 5, height: 5, borderRadius: "50%",
+                          background: count > 0 ? color : "#cbd5e1",
+                          flexShrink: 0,
+                        }} />
+                        <span className="bucket-tree__name">{leaf}</span>
+                        <span className="bucket-tree__count">{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

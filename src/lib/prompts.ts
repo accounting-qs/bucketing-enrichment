@@ -39,7 +39,8 @@ bucket_1.name MUST be one of these EXACT values (case-sensitive):
 ${bucketNamesList}
 
 Do NOT invent new bucket names. Do NOT paraphrase or abbreviate.
-If no bucket fits, use "General Industry".
+If no bucket fits, use "General Industry". If the value is an error or empty, use "Error / Failed Enrichment".
+If the description is present but too vague to classify with confidence, use "Needs Manual Review".
 
 ========================================
 NO SHORTCUTS
@@ -67,12 +68,12 @@ ANCESTOR CHAIN RULES (CRITICAL)
 
 You must output a fallback chain, not competing alternatives:
 
-- bucket_1 MUST be a LEAF bucket from the bucket list.
-- bucket_2 MUST be the direct_ancestor of bucket_1 (from the reference).
-- bucket_3 MUST be the root_category of bucket_1 (if defined), otherwise blank.
+- bucket_1 MUST be a LEAF bucket (sub_child_bucket) from the bucket list.
+- bucket_2 MUST be the direct_ancestor (child_bucket) of bucket_1 (from the reference).
+- bucket_3 MUST be the root_category (parent_bucket) of bucket_1 (if defined), otherwise blank.
 
 Do NOT output unrelated narrow buckets as bucket_2 or bucket_3.
-bucket_2 and bucket_3 are structural roll-ups.
+bucket_2 and bucket_3 are structural roll-ups — they reflect the hierarchy of bucket_1.
 
 ========================================
 ICP / DISQUALIFICATION
