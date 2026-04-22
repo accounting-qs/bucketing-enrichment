@@ -18,6 +18,8 @@ import {
   XCircle,
 } from "lucide-react";
 import AnalysisConfigPanel, { type AnalysisConfig } from "@/components/AnalysisConfigPanel";
+import { DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
+
 
 // ── Types ───────────────────────────────────────────────
 interface Project {
@@ -508,7 +510,6 @@ function AnalysisDetails({
 
   // Build full 41-bucket list: ALL taxonomy buckets with counts (0 if none)
   // Any non-taxonomy bucket names (AI-invented) get merged into General Industry
-  const { DEFAULT_TAXONOMY } = require("@/lib/defaultTaxonomy");
   const fullBuckets: [string, number][] = useMemo(() => {
     const bucketMap = new Map<string, number>();
     const validNames = new Set<string>();
