@@ -3,6 +3,7 @@ import IORedis from "ioredis";
 import { query, execute, batchInsert, getOne } from "../lib/db";
 import { downloadFile, writeToTempFile, deleteTempFile } from "../lib/storage";
 import { classifyBatch } from "../lib/ai";
+import { classifyDeterministic } from "../lib/deterministicClassifier";
 import { DEFAULT_TAXONOMY, getFullTaxonomy } from "../lib/defaultTaxonomy";
 import type { BucketDefinition, AIProvider } from "../types";
 
@@ -142,17 +143,50 @@ async function processAnalysisJob(job: Job) {
       );
 
       try {
-        const { results, tokenUsage } = await classifyBatch(
-          values,
-          taxonomy,
-          provider as AIProvider,
-        );
+        let classifiedResults: Array<{
+          index: number;
+          bucket_1: { name: string; score: number; reason: string };
+          bucket_2: { name: string; score: number; reason: string };
+          bucket_3: { name: string; score: number; reason: string };
+          generic: boolean;
+          disqualified: boolean;
+        }>;
 
-        totalTokens.promptTokens += tokenUsage.promptTokens;
-        totalTokens.completionTokens += tokenUsage.completionTokens;
-        totalTokens.totalTokens += tokenUsage.totalTokens;
+        if (provider === "deterministic") {
+          // ── Deterministic path: no AI, pure keyword matching ──
+          const detResults = classifyDeterministic(
+            values.map((v) => ({
+              index: v.index,
+              value: v.value,
+              allColumns: rows[v.index] || {},
+            })),
+            taxonomy
+          );
+          classifiedResults = detResults.map((r) => {
+            const bucketDef = taxonomy.find((b) => b.bucket_name === r.bucket);
+            return {
+              index: r.index,
+              bucket_1: { name: r.bucket, score: r.confidence, reason: r.reason },
+              bucket_2: { name: bucketDef?.direct_ancestor || "", score: 0, reason: "" },
+              bucket_3: { name: bucketDef?.root_category || "", score: 0, reason: "" },
+              generic: r.bucket === "General Industry" || r.bucket === "Needs Manual Review",
+              disqualified: false,
+            };
+          });
+        } else {
+          // ── AI path: call external LLM ──
+          const { results: aiResults, tokenUsage } = await classifyBatch(
+            values,
+            taxonomy,
+            provider as AIProvider,
+          );
+          totalTokens.promptTokens += tokenUsage.promptTokens;
+          totalTokens.completionTokens += tokenUsage.completionTokens;
+          totalTokens.totalTokens += tokenUsage.totalTokens;
+          classifiedResults = aiResults;
+        }
 
-        for (const res of results) {
+        for (const res of classifiedResults) {
           const row = rows[res.index];
           const bucketName = res.bucket_1.name || "General Industry";
           const isGeneric = res.generic || !res.bucket_1.name;
@@ -181,16 +215,16 @@ async function processAnalysisJob(job: Job) {
         }
       } catch (batchError) {
         console.error(`Batch error at rows ${batchStart}-${batchEnd}:`, batchError);
-        // Mark these rows as General Industry on error
+        // Mark these rows as Error / Failed Enrichment on error
         for (let i = batchStart; i < batchEnd; i++) {
           const row = rows[i];
           allAnalysisRows.push([
             analysisId, i, row[column] || "", JSON.stringify(row),
-            "General Industry", "General Industry", null, null, null,
-            "Batch classification error", true, false,
+            "Error / Failed Enrichment", "Error / Failed Enrichment", null, null, null,
+            `Batch classification error: ${String(batchError)}`, true, false,
           ]);
           generalCount++;
-          bucketDist["General Industry"] = (bucketDist["General Industry"] || 0) + 1;
+          bucketDist["Error / Failed Enrichment"] = (bucketDist["Error / Failed Enrichment"] || 0) + 1;
         }
       }
     }
