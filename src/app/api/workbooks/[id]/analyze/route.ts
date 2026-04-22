@@ -4,6 +4,7 @@ import { classifyBatch } from "@/lib/ai";
 import { downloadFile } from "@/lib/storage";
 import { getFullTaxonomy, DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
 import { classifyDeterministic, applyBucketThreshold } from "@/lib/deterministicClassifier";
+import { classifyWithDuckDB, applyBucketThresholdDuckDB } from "@/lib/duckdbEngine";
 import type { BucketDefinition, AIProvider } from "@/types";
 
 /** Safely parse a JSON string; returns fallback on any error */
@@ -219,10 +220,10 @@ async function processAnalysis(
     if (analysisMode === "deterministic_only") {
       await execute("UPDATE jobs SET message = 'Running deterministic classifier...' WHERE id = $1", [jobId]);
 
-      // Try DuckDB ensemble; if unavailable (Render cold start / native binding issue) fall back to JS
+      // Try DuckDB ensemble first; fall back to JS classifier if DuckDB unavailable at runtime
       let results: Array<{ index: number; value: string; bucket: string; confidence: number; method: "deterministic" | "needs_ai"; reason: string }>;
       try {
-        const { classifyWithEnsemble, applyBucketThresholdDuckDB } = await import("@/lib/duckdbEngine");
+        const { classifyWithEnsemble } = await import("@/lib/duckdbEngine");
         await execute("UPDATE jobs SET message = 'Phase 1/4: Running ensemble (3 strategies: exact, fuzzy, fallback)...' WHERE id = $1", [jobId]);
         results = await classifyWithEnsemble(rows, column, taxonomy);
         await execute("UPDATE jobs SET message = 'Phase 4/4: Applying bucket thresholds...' WHERE id = $1", [jobId]);
