@@ -4,8 +4,18 @@ import { classifyBatch } from "@/lib/ai";
 import { downloadFile } from "@/lib/storage";
 import { getFullTaxonomy, DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
 import { classifyDeterministic, applyBucketThreshold } from "@/lib/deterministicClassifier";
-import { classifyWithDuckDB, classifyWithEnsemble, applyBucketThresholdDuckDB } from "@/lib/duckdbEngine";
 import type { BucketDefinition, AIProvider } from "@/types";
+
+/** Safely parse a JSON string; returns fallback on any error */
+function safeParseJSON<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw || raw.trim() === "") return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn("safeParseJSON failed on:", String(raw).substring(0, 80));
+    return fallback;
+  }
+}
 
 // Parse CSV line (handles quoted fields)
 function parseCSVLine(line: string): string[] {
@@ -185,9 +195,9 @@ async function processAnalysis(
       description: r.description || "",
       direct_ancestor: r.direct_ancestor || "",
       root_category: r.root_category || "",
-      include: JSON.parse(r.include_terms || "[]"),
-      exclude: JSON.parse(r.exclude_terms || "[]"),
-      example_strings: JSON.parse(r.example_strings || "[]"),
+      include: safeParseJSON<string[]>(r.include_terms, []),
+      exclude: safeParseJSON<string[]>(r.exclude_terms, []),
+      example_strings: safeParseJSON<string[]>(r.example_strings, []),
     }));
 
     const taxonomy = getFullTaxonomy(customBuckets);
@@ -205,36 +215,32 @@ async function processAnalysis(
       value: row[column] || "",
       allColumns: row,
     }));
-
-    // ─── Deterministic Only (Ensemble) ──────────────────
+    // ─── Deterministic Only ──────────────────────────────────
     if (analysisMode === "deterministic_only") {
-      await execute("UPDATE jobs SET message = 'Phase 1/4: Running ensemble (3 strategies: exact, fuzzy, fallback)...' WHERE id = $1", [jobId]);
+      await execute("UPDATE jobs SET message = 'Running deterministic classifier...' WHERE id = $1", [jobId]);
 
-      let results;
+      // Try DuckDB ensemble; if unavailable (Render cold start / native binding issue) fall back to JS
+      let results: Array<{ index: number; value: string; bucket: string; confidence: number; method: string; reason: string }>;
       try {
+        const { classifyWithEnsemble, applyBucketThresholdDuckDB } = await import("@/lib/duckdbEngine");
+        await execute("UPDATE jobs SET message = 'Phase 1/4: Running ensemble (3 strategies: exact, fuzzy, fallback)...' WHERE id = $1", [jobId]);
         results = await classifyWithEnsemble(rows, column, taxonomy);
         await execute("UPDATE jobs SET message = 'Phase 4/4: Applying bucket thresholds...' WHERE id = $1", [jobId]);
         results = applyBucketThresholdDuckDB(results, minBucketThreshold);
-      } catch (ensembleErr) {
-        console.warn("Ensemble failed, falling back to single-pass DuckDB:", ensembleErr);
-        try {
-          await execute("UPDATE jobs SET message = 'Falling back to single-pass DuckDB...' WHERE id = $1", [jobId]);
-          results = await classifyWithDuckDB(rows, column, taxonomy);
-          results = applyBucketThresholdDuckDB(results, minBucketThreshold);
-        } catch (duckErr) {
-          console.warn("DuckDB failed, falling back to JS classifier:", duckErr);
-          await execute("UPDATE jobs SET message = 'Falling back to JS classifier...' WHERE id = $1", [jobId]);
-          const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
-          let jsResults = classifyDeterministic(jsValues, taxonomy);
-          jsResults = applyBucketThreshold(jsResults, minBucketThreshold);
-          results = jsResults;
-        }
+      } catch (duckErr) {
+        console.warn("DuckDB unavailable, using JS classifier:", String(duckErr).substring(0, 200));
+        await execute("UPDATE jobs SET message = 'Running JS keyword classifier...' WHERE id = $1", [jobId]);
+        const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
+        let jsResults = classifyDeterministic(jsValues, taxonomy);
+        jsResults = applyBucketThreshold(jsResults, minBucketThreshold);
+        results = jsResults;
       }
 
       for (const res of results) {
         const row = rows[res.index];
         const bucketName = res.bucket;
-        if (bucketName === "General Industry") generalCount++;
+        const isFallbackBucket = ["General Industry", "Needs Manual Review", "Error / Failed Enrichment"].includes(bucketName);
+        if (isFallbackBucket) generalCount++;
         else if (res.confidence >= 0.8) exactMatches++;
         else aiClassified++;
 
@@ -242,11 +248,11 @@ async function processAnalysis(
         allAnalysisRows.push([
           analysisId, res.index, res.value, JSON.stringify(row),
           bucketName, bucketName, null, null,
-          res.confidence, res.reason, bucketName === "General Industry", false, 0,
+          res.confidence, res.reason, isFallbackBucket, false, 0,
         ]);
       }
 
-      await execute("UPDATE analyses SET progress = 100, message = 'DuckDB deterministic analysis complete' WHERE id = $1", [analysisId]);
+      await execute("UPDATE analyses SET progress = 100, message = 'Deterministic analysis complete' WHERE id = $1", [analysisId]);
     }
     // ─── Deterministic → AI ─────────────────────────────
     else if (analysisMode === "deterministic_then_ai") {
