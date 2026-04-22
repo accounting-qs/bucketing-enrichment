@@ -220,7 +220,7 @@ async function processAnalysis(
       await execute("UPDATE jobs SET message = 'Running deterministic classifier...' WHERE id = $1", [jobId]);
 
       // Try DuckDB ensemble; if unavailable (Render cold start / native binding issue) fall back to JS
-      let results: Array<{ index: number; value: string; bucket: string; confidence: number; method: string; reason: string }>;
+      let results: Array<{ index: number; value: string; bucket: string; confidence: number; method: "deterministic" | "needs_ai"; reason: string }>;
       try {
         const { classifyWithEnsemble, applyBucketThresholdDuckDB } = await import("@/lib/duckdbEngine");
         await execute("UPDATE jobs SET message = 'Phase 1/4: Running ensemble (3 strategies: exact, fuzzy, fallback)...' WHERE id = $1", [jobId]);
