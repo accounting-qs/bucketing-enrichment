@@ -16,11 +16,22 @@ import {
   Clock,
   Sparkles,
   XCircle,
+  Terminal,
+  Copy,
+  ChevronRight,
 } from "lucide-react";
 import AnalysisConfigPanel, { type AnalysisConfig } from "@/components/AnalysisConfigPanel";
 import { DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
 
-
+// ── Log types ─────────────────────────────────────────────
+interface AnalysisLog {
+  id: number;
+  created_at: string;
+  level: "debug" | "info" | "warn" | "error";
+  phase: string | null;
+  message: string;
+  details: Record<string, unknown> | null;
+}
 // ── Types ───────────────────────────────────────────────
 interface Project {
   id: string;
@@ -79,6 +90,7 @@ export default function ProjectDetailPage() {
     1: true, 2: false, 3: false,
   });
   const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
+  const [logDrawerAnalysisId, setLogDrawerAnalysisId] = useState<string | null>(null);
 
   // ── Data Fetching ─────────────────────────────────────
   const fetchProject = useCallback(async () => {
@@ -449,6 +461,14 @@ export default function ProjectDetailPage() {
                         <span className={`status-badge ${getStatusClass(analysis.status)}`}>
                           {analysis.status}
                         </span>
+                        <button
+                          className="btn btn--ghost btn--sm"
+                          style={{ fontSize: "0.72rem", padding: "3px 8px", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}
+                          onClick={(e) => { e.stopPropagation(); setLogDrawerAnalysisId(analysis.id); }}
+                          title="View run logs"
+                        >
+                          <Terminal size={12} /> Logs
+                        </button>
                         {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                       </div>
 
@@ -464,6 +484,153 @@ export default function ProjectDetailPage() {
         )}
       </div>
     </div>
+
+    {/* Log Drawer — rendered at page level, outside the step cards */}
+    {logDrawerAnalysisId && (
+      <AnalysisLogDrawer
+        analysisId={logDrawerAnalysisId}
+        onClose={() => setLogDrawerAnalysisId(null)}
+      />
+    )}
+  );
+}
+
+// ── Analysis Log Drawer ─────────────────────────────────
+
+const LOG_LEVEL_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
+  error: { bg: "rgba(239,68,68,0.1)",   color: "#ef4444", border: "rgba(239,68,68,0.3)",   label: "ERR" },
+  warn:  { bg: "rgba(234,179,8,0.08)",  color: "#d97706", border: "rgba(234,179,8,0.25)",  label: "WRN" },
+  info:  { bg: "rgba(59,130,246,0.07)", color: "#3b82f6", border: "rgba(59,130,246,0.2)",  label: "INF" },
+  debug: { bg: "rgba(148,163,184,0.06)",color: "#94a3b8", border: "rgba(148,163,184,0.15)",label: "DBG" },
+};
+
+function AnalysisLogDrawer({ analysisId, onClose }: { analysisId: string; onClose: () => void }) {
+  const [logs, setLogs] = useState<AnalysisLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [levelFilter, setLevelFilter] = useState<"all" | "error" | "warn" | "info">("all");
+  const [expandedLog, setExpandedLog] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/analyses/${analysisId}/logs?limit=500`)
+      .then(r => r.json())
+      .then(data => { setLogs(data.logs || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [analysisId]);
+
+  // Auto-scroll to bottom (most recent / failing entry)
+  useEffect(() => {
+    if (!loading) setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+  }, [loading]);
+
+  const filtered = useMemo(() => {
+    if (levelFilter === "all") return logs;
+    const priority: Record<string, number> = { error: 4, warn: 3, info: 2, debug: 1 };
+    const minP = priority[levelFilter] || 0;
+    return logs.filter(l => (priority[l.level] || 0) >= minP);
+  }, [logs, levelFilter]);
+
+  const handleCopy = () => {
+    const text = filtered.map(l =>
+      `[${new Date(l.created_at).toISOString()}] [${l.level.toUpperCase()}] [${l.phase || "—"}] ${l.message}` +
+      (l.details ? "\n  " + JSON.stringify(l.details, null, 2).replace(/\n/g, "\n  ") : "")
+    ).join("\n");
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  const errorCount = logs.filter(l => l.level === "error").length;
+  const warnCount  = logs.filter(l => l.level === "warn").length;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="log-drawer__backdrop" onClick={onClose} />
+
+      {/* Drawer panel */}
+      <div className="log-drawer">
+        {/* Header */}
+        <div className="log-drawer__header">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Terminal size={16} style={{ color: "var(--primary)" }} />
+            <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>Analysis Run Logs</span>
+            {errorCount > 0 && (
+              <span style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444", fontSize: "0.68rem", padding: "2px 7px", borderRadius: 10, fontWeight: 600 }}>
+                {errorCount} error{errorCount !== 1 ? "s" : ""}
+              </span>
+            )}
+            {warnCount > 0 && (
+              <span style={{ background: "rgba(234,179,8,0.12)", color: "#d97706", fontSize: "0.68rem", padding: "2px 7px", borderRadius: 10, fontWeight: 600 }}>
+                {warnCount} warning{warnCount !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button className="btn btn--ghost btn--sm" onClick={handleCopy} style={{ fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 4 }}>
+              <Copy size={12} /> {copied ? "Copied!" : "Copy All"}
+            </button>
+            <button className="btn btn--ghost btn--sm" onClick={onClose} style={{ fontSize: "0.72rem" }}>✕ Close</button>
+          </div>
+        </div>
+
+        {/* Filter bar */}
+        <div className="log-drawer__filters">
+          {(["all", "error", "warn", "info"] as const).map(l => (
+            <button
+              key={l}
+              className={`log-filter-btn ${levelFilter === l ? "log-filter-btn--active" : ""}`}
+              onClick={() => setLevelFilter(l)}
+            >
+              {l === "all" ? `All (${logs.length})` : l === "error" ? `Errors (${errorCount})` : l === "warn" ? `Warnings (${warnCount})` : `Info (${logs.filter(x => x.level === "info").length})`}
+            </button>
+          ))}
+        </div>
+
+        {/* Log list */}
+        <div className="log-drawer__body">
+          {loading ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "#94a3b8", gap: 8 }}>
+              <Loader2 size={16} className="spin" /> Loading logs...
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "48px 24px", color: "#64748b" }}>
+              <Terminal size={28} style={{ marginBottom: 8, opacity: 0.4 }} />
+              <p style={{ margin: 0, fontSize: "0.85rem" }}>No logs found for this analysis.</p>
+              <p style={{ margin: "4px 0 0", fontSize: "0.75rem", color: "#94a3b8" }}>Logs are written for analyses run after this feature was deployed.</p>
+            </div>
+          ) : (
+            filtered.map((log) => {
+              const style = LOG_LEVEL_STYLES[log.level] || LOG_LEVEL_STYLES.debug;
+              const isExpanded = expandedLog === log.id;
+              const ts = new Date(log.created_at).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+              return (
+                <div key={log.id} className="log-entry" style={{ borderLeft: `3px solid ${style.border}`, background: style.bg }}>
+                  <div
+                    className="log-entry__row"
+                    onClick={() => log.details ? setExpandedLog(isExpanded ? null : log.id) : undefined}
+                    style={{ cursor: log.details ? "pointer" : "default" }}
+                  >
+                    <span className="log-entry__time">{ts}</span>
+                    <span className="log-entry__level" style={{ color: style.color, background: `${style.color}18` }}>{style.label}</span>
+                    {log.phase && <span className="log-entry__phase">{log.phase}</span>}
+                    <span className="log-entry__msg">{log.message}</span>
+                    {log.details && (
+                      <ChevronRight size={12} style={{ color: "#94a3b8", flexShrink: 0, transition: "transform 0.2s", transform: isExpanded ? "rotate(90deg)" : "none" }} />
+                    )}
+                  </div>
+                  {isExpanded && log.details && (
+                    <pre className="log-entry__details">{JSON.stringify(log.details, null, 2)}</pre>
+                  )}
+                </div>
+              );
+            })
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    </>
   );
 }
 

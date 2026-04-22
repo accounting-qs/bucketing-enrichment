@@ -117,6 +117,16 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS analysis_logs (
+  id          BIGSERIAL PRIMARY KEY,
+  analysis_id UUID NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  level       TEXT NOT NULL DEFAULT 'info',
+  phase       TEXT,
+  message     TEXT NOT NULL,
+  details     JSONB
+);
+
 CREATE INDEX IF NOT EXISTS idx_workbooks_project ON workbooks(project_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_project ON analyses(project_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_workbook ON analyses(workbook_id);
@@ -125,6 +135,7 @@ CREATE INDEX IF NOT EXISTS idx_analysis_rows_bucket ON analysis_rows(analysis_id
 CREATE INDEX IF NOT EXISTS idx_analysis_rows_industry ON analysis_rows(analysis_id, industry);
 CREATE INDEX IF NOT EXISTS idx_jobs_analysis ON jobs(analysis_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_analysis_logs_analysis ON analysis_logs(analysis_id, created_at);
 `;
 
 // Individual migration ALTER statements — run separately so each can be
@@ -135,6 +146,19 @@ const MIGRATION_ALTERS = [
   `ALTER TABLE analyses ADD COLUMN IF NOT EXISTS min_bucket_threshold INTEGER NOT NULL DEFAULT 5`,
   `ALTER TABLE analyses ADD COLUMN IF NOT EXISTS estimated_cost NUMERIC(10,6) DEFAULT 0`,
   `ALTER TABLE analysis_rows ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10,8) DEFAULT 0`,
+  // analysis_logs table — added as migration in case DB already existed before this deploy
+  `CREATE TABLE IF NOT EXISTS analysis_logs (
+    id          BIGSERIAL PRIMARY KEY,
+    analysis_id UUID NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    level       TEXT NOT NULL DEFAULT 'info',
+    phase       TEXT,
+    message     TEXT NOT NULL,
+    details     JSONB
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_analysis_logs_analysis ON analysis_logs(analysis_id, created_at)`,
+  // Auto-purge old logs — keep only 30 days. Safe to run every startup (deletes 0 rows if nothing old)
+  `DELETE FROM analysis_logs WHERE created_at < NOW() - INTERVAL '30 days'`,
 ];
 
 
@@ -289,3 +313,27 @@ export async function batchInsert(
 }
 
 export default { query, getOne, execute, transaction, batchInsert };
+
+/**
+ * Write a structured log entry for an analysis run.
+ * Fire-and-forget — never throws, never blocks the pipeline.
+ */
+export async function logAnalysis(
+  analysisId: string,
+  level: "debug" | "info" | "warn" | "error",
+  phase: string,
+  message: string,
+  details?: Record<string, unknown>
+): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO analysis_logs (analysis_id, level, phase, message, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [analysisId, level, phase, message, details ? JSON.stringify(details) : null]
+    );
+  } catch {
+    // Never let logging failure crash the analysis
+    console.warn(">>> logAnalysis failed silently for", analysisId);
+  }
+}
+

@@ -5,6 +5,7 @@ import { downloadFile } from "@/lib/storage";
 import { getFullTaxonomy, DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
 import { classifyDeterministic, applyBucketThreshold } from "@/lib/deterministicClassifier";
 import { classifyWithDuckDB, applyBucketThresholdDuckDB } from "@/lib/duckdbEngine";
+import { logAnalysis } from "@/lib/db";
 import type { BucketDefinition, AIProvider } from "@/types";
 
 /** Safely parse a JSON string; returns fallback on any error */
@@ -175,6 +176,10 @@ async function processAnalysis(
   try {
     await execute("UPDATE analyses SET status = 'processing', started_at = NOW() WHERE id = $1", [analysisId]);
     await execute("UPDATE jobs SET status = 'processing', message = 'Downloading file...' WHERE id = $1", [jobId]);
+    await logAnalysis(analysisId, "info", "init",
+      `Analysis started — mode: ${analysisMode}, provider: ${provider}, row_limit: ${effectiveRows}`,
+      { analysisMode, provider, model, effectiveRows, minBucketThreshold }
+    );
 
     // Get workbook and download CSV
     const workbook = await getOne<{ storage_key: string }>("SELECT storage_key FROM workbooks WHERE id = $1", [workbookId]);
@@ -184,6 +189,10 @@ async function processAnalysis(
     const csvText = buffer.toString("utf-8");
     const { rows: allRows } = parseCSV(csvText);
     const rows = allRows.slice(0, effectiveRows);
+    await logAnalysis(analysisId, "info", "download",
+      `CSV downloaded — ${rows.length} rows, column: "${column}"`,
+      { totalRows: rows.length, storageKey: workbook.storage_key }
+    );
 
     // Get taxonomy
     const customBucketRows = await query<{
@@ -202,6 +211,10 @@ async function processAnalysis(
     }));
 
     const taxonomy = getFullTaxonomy(customBuckets);
+    await logAnalysis(analysisId, "info", "taxonomy",
+      `Taxonomy loaded — ${taxonomy.length} buckets (${customBuckets.length} custom)`,
+      { totalBuckets: taxonomy.length, customBuckets: customBuckets.length }
+    );
 
     await execute("UPDATE analyses SET total_rows = $1 WHERE id = $2", [rows.length, analysisId]);
 
@@ -225,16 +238,35 @@ async function processAnalysis(
       try {
         const { classifyWithEnsemble } = await import("@/lib/duckdbEngine");
         await execute("UPDATE jobs SET message = 'Phase 1/4: Running ensemble (3 strategies: exact, fuzzy, fallback)...' WHERE id = $1", [jobId]);
+        await logAnalysis(analysisId, "info", "classify", "DuckDB ensemble starting", { rows: rows.length });
+        const t0 = Date.now();
         results = await classifyWithEnsemble(rows, column, taxonomy);
         await execute("UPDATE jobs SET message = 'Phase 4/4: Applying bucket thresholds...' WHERE id = $1", [jobId]);
         results = applyBucketThresholdDuckDB(results, minBucketThreshold);
+        const classified = results.filter(r => r.method === "deterministic").length;
+        const general = results.filter(r => r.bucket === "General Industry").length;
+        await logAnalysis(analysisId, "info", "classify",
+          `DuckDB ensemble complete — ${classified} classified, ${general} → General Industry, ${results.length - classified - general} low-confidence`,
+          { classified, general, lowConfidence: results.length - classified - general, durationMs: Date.now() - t0 }
+        );
       } catch (duckErr) {
-        console.warn("DuckDB unavailable, using JS classifier:", String(duckErr).substring(0, 200));
+        const errMsg = String(duckErr).substring(0, 400);
+        await logAnalysis(analysisId, "warn", "classify",
+          `DuckDB unavailable — falling back to JS keyword classifier`,
+          { error: errMsg }
+        );
+        console.warn("DuckDB unavailable, using JS classifier:", errMsg);
         await execute("UPDATE jobs SET message = 'Running JS keyword classifier...' WHERE id = $1", [jobId]);
+        const t0 = Date.now();
         const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
         let jsResults = classifyDeterministic(jsValues, taxonomy);
         jsResults = applyBucketThreshold(jsResults, minBucketThreshold);
         results = jsResults;
+        const classified = jsResults.filter(r => r.method === "deterministic").length;
+        await logAnalysis(analysisId, "info", "classify",
+          `JS classifier complete — ${classified}/${rows.length} classified`,
+          { classified, total: rows.length, durationMs: Date.now() - t0 }
+        );
       }
 
       for (const res of results) {
@@ -261,8 +293,16 @@ async function processAnalysis(
 
       let detResults;
       try {
+        await logAnalysis(analysisId, "info", "classify", "DuckDB deterministic pass starting", { rows: rows.length });
+        const t0 = Date.now();
         detResults = await classifyWithDuckDB(rows, column, taxonomy);
+        await logAnalysis(analysisId, "info", "classify",
+          `DuckDB pass complete — ${detResults.filter((r: {method:string}) => r.method === "deterministic").length} confident, ${detResults.filter((r: {method:string}) => r.method === "needs_ai").length} → AI`,
+          { durationMs: Date.now() - t0 }
+        );
       } catch (duckErr) {
+        const errMsg = String(duckErr).substring(0, 400);
+        await logAnalysis(analysisId, "warn", "classify", "DuckDB failed — falling back to JS classifier", { error: errMsg });
         console.warn("DuckDB failed, falling back to JS:", duckErr);
         const jsValues = rows.map((row, i) => ({ index: i, value: row[column] || "", allColumns: row }));
         detResults = classifyDeterministic(jsValues, taxonomy);
@@ -386,11 +426,19 @@ async function processAnalysis(
 
     // Batch insert
     if (allAnalysisRows.length > 0) {
+      await logAnalysis(analysisId, "info", "insert",
+        `Inserting ${allAnalysisRows.length} rows into analysis_rows`,
+        { rowCount: allAnalysisRows.length }
+      );
+      const t0 = Date.now();
       await batchInsert("analysis_rows", [
         "analysis_id", "row_index", "original_value", "all_columns",
         "industry", "bucket_name", "root_category", "direct_ancestor",
         "confidence", "reason", "is_generic", "is_disqualified", "cost_usd",
       ], allAnalysisRows);
+      await logAnalysis(analysisId, "info", "insert",
+        `Insert complete — ${allAnalysisRows.length} rows saved in ${Date.now() - t0}ms`
+      );
     }
 
     // Update analysis as completed
@@ -409,11 +457,22 @@ async function processAnalysis(
 
     await execute("UPDATE jobs SET status = 'completed', progress = 100, message = 'Done', result_id = $1 WHERE id = $2", [analysisId, jobId]);
 
+    const generalPct = rows.length > 0 ? Math.round((generalCount / rows.length) * 100) : 0;
+    await logAnalysis(analysisId, "info", "complete",
+      `Analysis complete — ${rows.length} rows, ${exactMatches} high-confidence, ${generalCount} general (${generalPct}%), $${totalCostUsd.toFixed(4)} cost`,
+      { totalRows: rows.length, exactMatches, aiClassified, generalCount, generalPct, totalCostUsd, topBuckets: Object.entries(bucketDist).sort(([,a],[,b])=>b-a).slice(0,5) }
+    );
     console.log(`>>> Analysis ${analysisId} completed: ${rows.length} rows processed`);
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
     console.error(">>> Analysis error:", error);
-    await execute("UPDATE analyses SET status = 'failed', message = $1 WHERE id = $2", [String(error), analysisId]);
-    await execute("UPDATE jobs SET status = 'failed', message = $1 WHERE id = $2", [String(error), jobId]);
+    await logAnalysis(analysisId, "error", "failed",
+      `Analysis failed: ${errMsg}`,
+      { error: errMsg, stack }
+    ).catch(() => {});
+    await execute("UPDATE analyses SET status = 'failed', message = $1 WHERE id = $2", [errMsg.substring(0, 500), analysisId]);
+    await execute("UPDATE jobs SET status = 'failed', message = $1 WHERE id = $2", [errMsg.substring(0, 500), jobId]);
   }
 }
 
@@ -435,6 +494,8 @@ async function processAIBatches(
   const tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   const resultRows: unknown[][] = [];
   let totalCost = 0;
+  let batchGroupNum = 0;
+  let batchErrorCount = 0;
 
   // Process batches in parallel groups of PARALLEL_BATCHES
   for (let groupStart = 0; groupStart < values.length; groupStart += BATCH_SIZE * PARALLEL_BATCHES) {
@@ -465,6 +526,7 @@ async function processAIBatches(
     // Update progress
     const groupEnd = Math.min(groupStart + BATCH_SIZE * PARALLEL_BATCHES, values.length);
     const progress = Math.round(((processedSoFar + groupStart) / totalRows) * 100);
+    batchGroupNum++;
     await execute("UPDATE analyses SET progress = $1, message = $2, total_rows_processed = $3 WHERE id = $4",
       [progress, `Processing rows ${groupStart + 1}–${groupEnd} of ${values.length} (${PARALLEL_BATCHES} parallel)...`, processedSoFar + groupStart, analysisId]
     );
@@ -477,13 +539,19 @@ async function processAIBatches(
 
     for (const outcome of settled) {
       if (outcome.error || !outcome.results) {
-        console.error(`[AI] Batch error at index ${outcome.batchIndex}:`, outcome.error instanceof Error ? outcome.error.message : outcome.error);
+        batchErrorCount++;
+        const errMsg = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+        console.error(`[AI] Batch error at index ${outcome.batchIndex}:`, errMsg);
+        await logAnalysis(analysisId, "error", "classify",
+          `AI batch error at row ${outcome.batchIndex} — ${outcome.batch.length} rows fallback to General Industry`,
+          { batchIndex: outcome.batchIndex, batchSize: outcome.batch.length, error: errMsg, batchGroupNum }
+        );
         for (const item of outcome.batch) {
           const row = rows[item.index];
           resultRows.push([
             analysisId, item.index, item.value, JSON.stringify(row),
-            "General Industry", "General Industry", null, null,
-            null, "Batch classification error", true, false, 0,
+            "Error / Failed Enrichment", "Error / Failed Enrichment", null, null,
+            null, `Batch error: ${errMsg.substring(0, 100)}`, true, false, 0,
           ]);
         }
         continue;
