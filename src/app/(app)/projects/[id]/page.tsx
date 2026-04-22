@@ -251,6 +251,7 @@ export default function ProjectDetailPage() {
   if (!project) return <div className="empty-state">Project not found</div>;
 
   return (
+    <>
     <div className="page">
       {/* Header */}
       <div className="page__header">
@@ -492,6 +493,7 @@ export default function ProjectDetailPage() {
         onClose={() => setLogDrawerAnalysisId(null)}
       />
     )}
+    </>
   );
 }
 
