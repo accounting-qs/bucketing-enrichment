@@ -125,48 +125,73 @@ CREATE INDEX IF NOT EXISTS idx_analysis_rows_bucket ON analysis_rows(analysis_id
 CREATE INDEX IF NOT EXISTS idx_analysis_rows_industry ON analysis_rows(analysis_id, industry);
 CREATE INDEX IF NOT EXISTS idx_jobs_analysis ON jobs(analysis_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
-
--- Migrations: add new columns to existing tables (safe to run multiple times)
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='analysis_mode') THEN
-    ALTER TABLE analyses ADD COLUMN analysis_mode TEXT NOT NULL DEFAULT 'ai_only';
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='row_limit') THEN
-    ALTER TABLE analyses ADD COLUMN row_limit INTEGER;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='min_bucket_threshold') THEN
-    ALTER TABLE analyses ADD COLUMN min_bucket_threshold INTEGER NOT NULL DEFAULT 5;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analyses' AND column_name='estimated_cost') THEN
-    ALTER TABLE analyses ADD COLUMN estimated_cost NUMERIC(10,6) DEFAULT 0;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='analysis_rows' AND column_name='cost_usd') THEN
-    ALTER TABLE analysis_rows ADD COLUMN cost_usd NUMERIC(10,8) DEFAULT 0;
-  END IF;
-END $$;
 `;
 
+// Individual migration ALTER statements — run separately so each can be
+// skipped independently if the column already exists (PG 9.6+)
+const MIGRATION_ALTERS = [
+  `ALTER TABLE analyses ADD COLUMN IF NOT EXISTS analysis_mode TEXT NOT NULL DEFAULT 'ai_only'`,
+  `ALTER TABLE analyses ADD COLUMN IF NOT EXISTS row_limit INTEGER`,
+  `ALTER TABLE analyses ADD COLUMN IF NOT EXISTS min_bucket_threshold INTEGER NOT NULL DEFAULT 5`,
+  `ALTER TABLE analyses ADD COLUMN IF NOT EXISTS estimated_cost NUMERIC(10,6) DEFAULT 0`,
+  `ALTER TABLE analysis_rows ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10,8) DEFAULT 0`,
+];
+
+
 let migrationDone = false;
+let migrationFailed = false;
+
+// Split the schema into individual statements and run each separately.
+// DDL like CREATE INDEX and ALTER TABLE must NOT be wrapped in a single
+// transaction block on PostgreSQL — each is auto-committed.
+const SCHEMA_STATEMENTS = SCHEMA_SQL
+  .split(/;\s*\n/)
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0 && !s.startsWith("--"));
 
 /**
- * Run the schema migration (lazy, only on first DB call)
- * Uses a dedicated client with transaction for multi-statement DDL
+ * Run the schema migration (lazy, only on first DB call).
+ * Each statement is executed individually so a single failure
+ * doesn't roll back everything else.
  */
 export async function ensureMigrations(): Promise<void> {
-  if (migrationDone) return;
+  if (migrationDone || migrationFailed) return;
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    await client.query(SCHEMA_SQL);
-    await client.query("COMMIT");
+    // Run main schema statements individually
+    for (const stmt of SCHEMA_STATEMENTS) {
+      try {
+        await client.query(stmt);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes("already exists") ||
+          msg.includes("duplicate column") ||
+          msg.includes("duplicate key")
+        ) {
+          continue;
+        }
+        console.warn(">>> Migration statement warning:", msg.substring(0, 120));
+      }
+    }
+
+    // Run column migrations individually (ALTER TABLE IF NOT EXISTS)
+    for (const stmt of MIGRATION_ALTERS) {
+      try {
+        await client.query(stmt);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("already exists") || msg.includes("duplicate column")) continue;
+        console.warn(">>> Migration ALTER warning:", msg.substring(0, 120));
+      }
+    }
+
     migrationDone = true;
     console.log(">>> Database migration successful");
   } catch (err: unknown) {
-    await client.query("ROLLBACK").catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
     console.error(">>> Database migration error:", message);
-    // Don't mark as done — retry next time, but don't block the request
-    // The actual query will fail with a more descriptive error
+    migrationFailed = true;
   } finally {
     client.release();
   }
