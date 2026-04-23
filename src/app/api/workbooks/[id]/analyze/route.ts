@@ -8,13 +8,18 @@ import { classifyWithDuckDB, applyBucketThresholdDuckDB } from "@/lib/duckdbEngi
 import { logAnalysis } from "@/lib/db";
 import type { BucketDefinition, AIProvider } from "@/types";
 
-/** Safely parse a JSON string; returns fallback on any error */
-function safeParseJSON<T>(raw: string | null | undefined, fallback: T): T {
-  if (!raw || raw.trim() === "") return fallback;
+/** Safely parse a JSON string; returns fallback on any error.
+ *  NOTE: pg auto-parses JSONB columns into JS objects, so `raw` may already
+ *  be a parsed array/object — in that case return it directly. */
+function safeParseJSON<T>(raw: unknown, fallback: T): T {
+  if (raw === null || raw === undefined) return fallback;
+  // pg JSONB auto-parse: already a JS value, return as-is
+  if (typeof raw !== "string") return raw as T;
+  if (raw.trim() === "") return fallback;
   try {
     return JSON.parse(raw) as T;
   } catch {
-    console.warn("safeParseJSON failed on:", String(raw).substring(0, 80));
+    console.warn("safeParseJSON failed on:", raw.substring(0, 80));
     return fallback;
   }
 }
