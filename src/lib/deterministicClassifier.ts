@@ -90,7 +90,8 @@ function classifyOne(
 
     // Check exclude terms
     for (const term of bucket.exclude) {
-      if (allWordsPresent(primaryLower, term)) {
+      if (term == null) continue; // guard against null entries from DB
+      if (allWordsPresent(primaryLower, String(term))) {
         excluded = true;
         break;
       }
@@ -132,7 +133,7 @@ function classifyOne(
 
       if (matchRatio >= 0.6) {
         score += Math.round(matchRatio * 4);
-        matchedTerms.push(`ex:"${example.substring(0, 25)}…"`);
+        matchedTerms.push(`ex:"${String(example).substring(0, 25)}…"`);
       }
     }
 
