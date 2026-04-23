@@ -99,7 +99,8 @@ function classifyOne(
 
     // Score include terms with word-level matching — PRIMARY column ONLY
     for (const term of bucket.include) {
-      const termLower = term.toLowerCase();
+      if (term == null) continue; // guard against null entries from DB
+      const termLower = String(term).toLowerCase();
       const wordCount = Math.max(1, termLower.split(/\s+/).length);
 
       // Primary value — exact phrase match (highest weight)
@@ -121,7 +122,8 @@ function classifyOne(
 
     // Check example_strings for similarity
     for (const example of bucket.example_strings) {
-      const exLower = example.toLowerCase();
+      if (example == null) continue; // guard against null entries from DB
+      const exLower = String(example).toLowerCase();
 
       // Check if most words from example are in primary
       const exWords = exLower.split(/\s+/).filter(w => w.length > 2);
@@ -135,10 +137,11 @@ function classifyOne(
     }
 
     // Single important word matches (catch individual words like "accounting", "bank", "manufacturing")
-    const singleWordTerms = bucket.include.filter(t => !t.includes(" "));
+    const singleWordTerms = bucket.include.filter(t => t != null && !String(t).includes(" "));
     for (const term of singleWordTerms) {
       // Already scored above, but check if primary starts with or prominently features the word
-      if (primaryLower.startsWith(term.toLowerCase()) || primaryLower.includes(` ${term.toLowerCase()} `)) {
+      const tl = String(term).toLowerCase();
+      if (primaryLower.startsWith(tl) || primaryLower.includes(` ${tl} `)) {
         score += 1; // Small bonus for prominent single-word match
       }
     }

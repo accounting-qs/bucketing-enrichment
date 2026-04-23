@@ -205,9 +205,9 @@ async function processAnalysis(
       description: r.description || "",
       direct_ancestor: r.direct_ancestor || "",
       root_category: r.root_category || "",
-      include: safeParseJSON<string[]>(r.include_terms, []),
-      exclude: safeParseJSON<string[]>(r.exclude_terms, []),
-      example_strings: safeParseJSON<string[]>(r.example_strings, []),
+      include: safeParseJSON<string[]>(r.include_terms, []).filter((t): t is string => typeof t === "string" && t.trim() !== ""),
+      exclude: safeParseJSON<string[]>(r.exclude_terms, []).filter((t): t is string => typeof t === "string" && t.trim() !== ""),
+      example_strings: safeParseJSON<string[]>(r.example_strings, []).filter((t): t is string => typeof t === "string" && t.trim() !== ""),
     }));
 
     const taxonomy = getFullTaxonomy(customBuckets);

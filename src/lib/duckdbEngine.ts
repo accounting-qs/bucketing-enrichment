@@ -340,7 +340,8 @@ function buildStrategySQLParts(
   const reasonTerms: string[] = [];
 
   for (const term of bucket.include) {
-    const termLower = term.toLowerCase();
+    if (term == null) continue; // guard against null entries in DB JSONB
+    const termLower = String(term).toLowerCase();
     const words = termLower.split(/\s+/).filter((w) => w.length > 1);
     if (words.length === 0) continue;
 
@@ -567,7 +568,8 @@ async function runRescuePass(
       const excludeConditions: string[] = [];
 
       for (const term of bucket.include) {
-        const termLower = term.toLowerCase();
+        if (term == null) continue; // guard against null entries in DB JSONB
+        const termLower = String(term).toLowerCase();
         const words = termLower.split(/\s+/).filter((w) => w.length > 1);
         if (words.length === 0) continue;
 
