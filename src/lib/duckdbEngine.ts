@@ -68,9 +68,10 @@ export async function classifyWithDuckDB(
 
       const fallbackParts: string[] = [];
       for (const [key, val] of Object.entries(rows[i])) {
-        if (key === selectedColumn || !val || !val.trim()) continue;
+        const valStr = String(val ?? "");
+        if (key === selectedColumn || !valStr || !valStr.trim()) continue;
         if (METADATA_COLUMNS.has(key.toLowerCase().trim())) continue;
-        const v = val.trim().toLowerCase();
+        const v = valStr.trim().toLowerCase();
         // Skip very short values (likely abbreviations or IDs)
         if (v.length <= 2) continue;
         // Extract email domain as words: user@goldandcoin.com → "goldandcoin"
@@ -303,9 +304,10 @@ function buildFallbackText(
 ): string {
   const parts: string[] = [];
   for (const [key, val] of Object.entries(row)) {
-    if (key === selectedColumn || !val?.trim()) continue;
+    const valStr = String(val ?? "");
+    if (key === selectedColumn || !valStr?.trim()) continue;
     const k = key.toLowerCase().trim();
-    const v = val.trim().toLowerCase();
+    const v = valStr.trim().toLowerCase();
 
     if (v.includes("@") && v.includes(".")) {
       const domain = v.split("@")[1]?.split(".")[0] || "";

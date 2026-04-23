@@ -46,8 +46,8 @@ export function classifyDeterministic(
   return batch.map((item) => classifyOne(item.index, item.value, item.allColumns || {}, taxonomy));
 }
 
-function isErrorValue(val: string): boolean {
-  const v = val.toLowerCase().trim();
+function isErrorValue(val: unknown): boolean {
+  const v = String(val ?? "").toLowerCase().trim();
   if (!v || v === "null" || v === "n/a" || v === "na" || v === "error") return true;
   // Scraper error patterns
   if (v.includes("scrape error") || v.includes("site error") || v.includes("crawl error")) return true;
@@ -63,7 +63,7 @@ function classifyOne(
   allColumns: Record<string, string>,
   taxonomy: BucketDefinition[]
 ): DeterministicResult {
-  const primaryLower = primaryValue.toLowerCase().trim();
+  const primaryLower = String(primaryValue ?? "").toLowerCase().trim();
 
   if (!primaryLower || isErrorValue(primaryLower)) {
     return {

@@ -335,8 +335,8 @@ async function processAnalysis(
           const row = rows[r.index];
           // Build enriched value with all column context for the AI
           const allVals = Object.entries(row)
-            .filter(([k, v]) => v && v.trim())
-            .map(([k, v]) => `${k}: ${v}`)
+            .filter(([k, v]) => { const s = String(v ?? ""); return s && s.trim(); })
+            .map(([k, v]) => `${k}: ${String(v ?? "").trim()}`)
             .join(" | ");
           return { index: r.index, value: allVals || r.value };
         });
@@ -359,8 +359,8 @@ async function processAnalysis(
       const enrichedValues = values.map((v) => {
         const row = rows[v.index];
         const allVals = Object.entries(row)
-          .filter(([k, val]) => val && val.trim())
-          .map(([k, val]) => `${k}: ${val}`)
+          .filter(([k, val]) => { const s = String(val ?? ""); return s && s.trim(); })
+          .map(([k, val]) => `${k}: ${String(val ?? "").trim()}`)
           .join(" | ");
         return { index: v.index, value: allVals || v.value };
       });
@@ -402,8 +402,8 @@ async function processAnalysis(
       const enrichedValues = values.map((v) => {
         const row = rows[v.index];
         const allVals = Object.entries(row)
-          .filter(([k, val]) => val && val.trim())
-          .map(([k, val]) => `${k}: ${val}`)
+          .filter(([k, val]) => { const s = String(val ?? ""); return s && s.trim(); })
+          .map(([k, val]) => `${k}: ${String(val ?? "").trim()}`)
           .join(" | ");
         return { index: v.index, value: allVals || v.value };
       });
