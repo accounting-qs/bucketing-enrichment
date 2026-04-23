@@ -13,31 +13,35 @@ export async function GET(
   const bucket = searchParams.get("bucket") || null;
   const sort = searchParams.get("sort") || "row_index";
   const order = searchParams.get("order") === "desc" ? "DESC" : "ASC";
+  const search = searchParams.get("search") || null;
 
   // Validate sort column
-  const validSorts = ["row_index", "bucket_name", "confidence", "cost_usd", "original_value"];
+  const validSorts = ["row_index", "bucket_name", "confidence", "cost_usd", "original_value", "reason"];
   const sortCol = validSorts.includes(sort) ? sort : "row_index";
 
   const offset = (page - 1) * pageSize;
-
-  // Build query with optional bucket filter
-  let countQuery = "SELECT COUNT(*) as total FROM analysis_rows WHERE analysis_id = $1";
-  let dataQuery = `SELECT id, row_index, original_value, all_columns, bucket_name, confidence, reason, is_generic, is_disqualified, cost_usd
-    FROM analysis_rows WHERE analysis_id = $1`;
   const args: unknown[] = [id];
 
+  let where = "analysis_id = $1";
+
   if (bucket && bucket !== "all") {
-    countQuery += ` AND bucket_name = $2`;
-    dataQuery += ` AND bucket_name = $2`;
     args.push(bucket);
+    where += ` AND bucket_name = $${args.length}`;
   }
 
-  dataQuery += ` ORDER BY ${sortCol} ${order} LIMIT $${args.length + 1} OFFSET $${args.length + 2}`;
-  args.push(pageSize, offset);
+  if (search && search.trim()) {
+    args.push(`%${search.trim()}%`);
+    where += ` AND (original_value ILIKE $${args.length} OR reason ILIKE $${args.length})`;
+  }
+
+  const countQuery = `SELECT COUNT(*) as total FROM analysis_rows WHERE ${where}`;
+  const dataQuery = `SELECT id, row_index, original_value, all_columns, bucket_name, confidence, reason, is_generic, is_disqualified, cost_usd
+    FROM analysis_rows WHERE ${where}
+    ORDER BY ${sortCol} ${order} LIMIT $${args.length + 1} OFFSET $${args.length + 2}`;
 
   const [countResult, rows] = await Promise.all([
-    query<{ total: string }>(countQuery, bucket && bucket !== "all" ? [id, bucket] : [id]),
-    query(dataQuery, args),
+    query<{ total: string }>(countQuery, args),
+    query(dataQuery, [...args, pageSize, offset]),
   ]);
 
   const total = parseInt(countResult[0]?.total || "0");

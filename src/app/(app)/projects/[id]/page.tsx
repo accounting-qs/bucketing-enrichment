@@ -19,6 +19,11 @@ import {
   Terminal,
   Copy,
   ChevronRight,
+  Search,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  X,
 } from "lucide-react";
 import AnalysisConfigPanel, { type AnalysisConfig } from "@/components/AnalysisConfigPanel";
 import { DEFAULT_TAXONOMY } from "@/lib/defaultTaxonomy";
@@ -675,6 +680,18 @@ function AnalysisDetails({
   const [activeBucket, setActiveBucket] = useState("all");
   const [showTable, setShowTable] = useState(false);
 
+  // ── Sort ──────────────────────────────────────────────────
+  const [sortCol, setSortCol] = useState("row_index");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  // ── Search filter ─────────────────────────────────────────
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Full-text popover ─────────────────────────────────────
+  const [popover, setPopover] = useState<{ text: string; x: number; y: number } | null>(null);
+
   const dist = analysis.bucket_distribution || {};
 
   // Build full 41-bucket list: ALL taxonomy buckets with counts (0 if none)
@@ -699,17 +716,12 @@ function AnalysisDetails({
     return Array.from(bucketMap.entries()).sort(([, a], [, b]) => b - a);
   }, [dist]);
 
-  const fetchRows = useCallback(async (p: number, bucket: string) => {
+  const fetchRows = useCallback(async (p: number, bucket: string, sc: string, sd: string, q: string) => {
     setLoadingRows(true);
     try {
-      const params = new URLSearchParams({
-        page: String(p),
-        pageSize: "50",
-        sort: "row_index",
-        order: "asc",
-      });
+      const params = new URLSearchParams({ page: String(p), pageSize: "50", sort: sc, order: sd });
       if (bucket && bucket !== "all") params.set("bucket", bucket);
-
+      if (q) params.set("search", q);
       const res = await fetch(`/api/analyses/${analysis.id}/rows?${params}`);
       if (res.ok) {
         const data = await res.json();
@@ -726,23 +738,89 @@ function AnalysisDetails({
   }, [analysis.id]);
 
   useEffect(() => {
-    if (showTable) fetchRows(1, activeBucket);
-  }, [showTable, activeBucket, fetchRows]);
+    if (showTable) fetchRows(1, activeBucket, sortCol, sortDir, debouncedSearch);
+  }, [showTable, activeBucket, sortCol, sortDir, debouncedSearch, fetchRows]);
 
-  // Extract CSV column names from first row's all_columns
+  // Debounce search
+  const handleSearchChange = (val: string) => {
+    setSearch(val);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => setDebouncedSearch(val), 350);
+  };
+
+  // Popover: close on outside click
+  useEffect(() => {
+    if (!popover) return;
+    const h = () => setPopover(null);
+    window.addEventListener("click", h);
+    return () => window.removeEventListener("click", h);
+  }, [popover]);
+
   const csvColumns = useMemo(() => {
     if (rows.length === 0) return [];
-    const parsed = parseAllColumns(rows[0].all_columns);
-    return Object.keys(parsed);
+    return Object.keys(parseAllColumns(rows[0].all_columns));
   }, [rows]);
 
   const handleBucketClick = (bucket: string) => {
     setActiveBucket(bucket);
+    setSearch("");
+    setDebouncedSearch("");
     setPage(1);
+  };
+
+  const handleSort = (col: string) => {
+    const nextDir = sortCol === col && sortDir === "asc" ? "desc" : "asc";
+    setSortCol(col);
+    setSortDir(nextDir);
+  };
+
+  const SortIcon = ({ col }: { col: string }) => {
+    if (sortCol !== col) return <ArrowUpDown size={11} style={{ opacity: 0.35, marginLeft: 3, verticalAlign: "middle" }} />;
+    return sortDir === "asc"
+      ? <ArrowUp size={11} style={{ color: "var(--primary)", marginLeft: 3, verticalAlign: "middle" }} />
+      : <ArrowDown size={11} style={{ color: "var(--primary)", marginLeft: 3, verticalAlign: "middle" }} />;
+  };
+
+  const handleCellClick = (e: React.MouseEvent, text: string) => {
+    if (!text || text.length < 30) return;
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPopover({ text, x: rect.left, y: rect.bottom + 6 });
   };
 
   return (
     <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
+      {/* Full-text popover */}
+      {popover && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed",
+            left: Math.min(popover.x, window.innerWidth - 360),
+            top: popover.y,
+            zIndex: 9999,
+            background: "var(--card-bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "10px 14px",
+            maxWidth: 340,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+            fontSize: "0.78rem",
+            color: "var(--text)",
+            wordBreak: "break-word",
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6, gap: 8 }}>
+            <span style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>Full value</span>
+            <button onClick={() => setPopover(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", lineHeight: 1, padding: 0 }}>
+              <X size={13} />
+            </button>
+          </div>
+          {popover.text}
+        </div>
+      )}
+
       {/* Stats row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
         <div className="results-stat">
@@ -770,11 +848,7 @@ function AnalysisDetails({
         <a href={`/api/analyses/${analysis.id}/export`} className="btn btn--ghost" style={{ fontSize: "0.82rem" }}>
           <Download size={14} /> Export CSV
         </a>
-        <button
-          className="btn btn--ghost"
-          style={{ fontSize: "0.82rem" }}
-          onClick={() => setShowTable(!showTable)}
-        >
+        <button className="btn btn--ghost" style={{ fontSize: "0.82rem" }} onClick={() => setShowTable(!showTable)}>
           <BarChart3 size={14} /> {showTable ? "Hide" : "View"} Data Table
         </button>
       </div>
@@ -782,7 +856,6 @@ function AnalysisDetails({
       {/* Split-pane: Bucket Tree + Data Table */}
       {showTable && (
         <div className="analysis-explorer" style={{ gridTemplateColumns: "280px 1fr" }}>
-          {/* Left: Grouped 3-level bucket tree */}
           <GroupedBucketTree
             taxonomy={DEFAULT_TAXONOMY}
             fullBuckets={fullBuckets}
@@ -791,7 +864,6 @@ function AnalysisDetails({
             onBucketClick={handleBucketClick}
           />
 
-          {/* Right: Data table */}
           <div className="analysis-table-wrap">
             {/* Header */}
             <div className="analysis-table-header">
@@ -799,8 +871,25 @@ function AnalysisDetails({
                 {activeBucket === "all" ? "All Buckets" : activeBucket}
               </span>
               <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
-                Page {page}/{totalPages} · {totalRowCount} rows
+                Page {page}/{totalPages} · {totalRowCount.toLocaleString()} rows
               </span>
+            </div>
+
+            {/* Filter bar */}
+            <div style={{ padding: "6px 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+              <Search size={13} style={{ color: "#64748b", flexShrink: 0 }} />
+              <input
+                type="text"
+                placeholder="Filter by classification or reason…"
+                value={search}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontSize: "0.78rem", color: "var(--text)", minWidth: 0 }}
+              />
+              {search && (
+                <button onClick={() => handleSearchChange("")} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", padding: 0, display: "flex" }}>
+                  <X size={13} />
+                </button>
+              )}
             </div>
 
             {loadingRows ? (
@@ -810,13 +899,22 @@ function AnalysisDetails({
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th style={{ position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)" }}>#</th>
+                      <th
+                        style={{ position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                        onClick={() => handleSort("row_index")}
+                      ># <SortIcon col="row_index" /></th>
                       {csvColumns.map((col: string) => (
-                        <th key={col}>{col}</th>
+                        <th key={col} style={{ whiteSpace: "nowrap" }}>{col}</th>
                       ))}
-                      <th>Bucket</th>
-                      <th>Confidence</th>
-                      <th>Reason</th>
+                      <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => handleSort("bucket_name")}>
+                        Bucket <SortIcon col="bucket_name" />
+                      </th>
+                      <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => handleSort("confidence")}>
+                        Confidence <SortIcon col="confidence" />
+                      </th>
+                      <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => handleSort("reason")}>
+                        Reason <SortIcon col="reason" />
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -830,8 +928,14 @@ function AnalysisDetails({
                           {csvColumns.map((col: string) => {
                             const val = parsed[col] || "";
                             const isUrl = /^https?:\/\/|^www\./i.test(val);
+                            const isTrunc = val.length > 28;
                             return (
-                              <td key={col} style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              <td
+                                key={col}
+                                style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: isTrunc ? "pointer" : "default" }}
+                                onClick={isTrunc ? (e) => handleCellClick(e, val) : undefined}
+                                title={isTrunc ? "Click to view full text" : val}
+                              >
                                 {isUrl ? (
                                   <a href={val.startsWith("http") ? val : `https://${val}`} target="_blank" rel="noopener noreferrer" style={{ color: "#10b981", textDecoration: "none" }}>
                                     {val}
@@ -852,14 +956,20 @@ function AnalysisDetails({
                               </span>
                             ) : "—"}
                           </td>
-                          <td style={{ maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", color: "#94a3b8" }}>
+                          <td
+                            style={{ maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", color: "#94a3b8", cursor: (row.reason?.length ?? 0) > 28 ? "pointer" : "default" }}
+                            onClick={(row.reason?.length ?? 0) > 28 ? (e) => handleCellClick(e, row.reason || "") : undefined}
+                            title={(row.reason?.length ?? 0) > 28 ? "Click to view full text" : undefined}
+                          >
                             {row.reason || "—"}
                           </td>
                         </tr>
                       );
                     })}
                     {rows.length === 0 && (
-                      <tr><td colSpan={csvColumns.length + 4} style={{ textAlign: "center", padding: 32, color: "#94a3b8" }}>No rows found</td></tr>
+                      <tr><td colSpan={csvColumns.length + 4} style={{ textAlign: "center", padding: 32, color: "#94a3b8" }}>
+                        {debouncedSearch ? `No rows matching "${debouncedSearch}"` : "No rows found"}
+                      </td></tr>
                     )}
                   </tbody>
                 </table>
@@ -869,13 +979,11 @@ function AnalysisDetails({
             {/* Pagination */}
             {totalPages > 1 && (
               <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "8px 0" }}>
-                <button className="btn btn--ghost btn--sm" disabled={page <= 1} onClick={() => fetchRows(page - 1, activeBucket)}>
+                <button className="btn btn--ghost btn--sm" disabled={page <= 1} onClick={() => fetchRows(page - 1, activeBucket, sortCol, sortDir, debouncedSearch)}>
                   ← Prev
                 </button>
-                <span style={{ fontSize: "0.78rem", lineHeight: "32px", color: "#94a3b8" }}>
-                  {page} / {totalPages}
-                </span>
-                <button className="btn btn--ghost btn--sm" disabled={page >= totalPages} onClick={() => fetchRows(page + 1, activeBucket)}>
+                <span style={{ fontSize: "0.78rem", lineHeight: "32px", color: "#94a3b8" }}>{page} / {totalPages}</span>
+                <button className="btn btn--ghost btn--sm" disabled={page >= totalPages} onClick={() => fetchRows(page + 1, activeBucket, sortCol, sortDir, debouncedSearch)}>
                   Next →
                 </button>
               </div>
