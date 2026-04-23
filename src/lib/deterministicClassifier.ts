@@ -167,7 +167,7 @@ function classifyOne(
 
   const top = scores[0];
   // Normalize confidence: each include term can contribute up to 4 points per word
-  const maxPossible = top.bucket.include.reduce((sum, t) => sum + Math.max(1, t.split(/\s+/).length) * 4, 0) + top.bucket.example_strings.length * 4;
+  const maxPossible = top.bucket.include.reduce((sum, t) => sum + Math.max(1, String(t ?? "").split(/\s+/).length) * 4, 0) + top.bucket.example_strings.length * 4;
   const normalizedConfidence = Math.min(1, top.score / Math.max(maxPossible, 8));
 
   // Check for ambiguity: if second-best score is within 20% of top
